@@ -14,7 +14,6 @@ import {
   ShieldCheck,
   FileText,
   Radio,
-  WifiOff,
   Copy,
   Trash2,
   X,
@@ -42,7 +41,6 @@ import { AudioCallModal } from './components/AudioCallModal';
 import { ContactModal } from './components/ContactModal';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ProfileSetupModal } from './components/ProfileSetupModal';
-import { OfflinePairingModal } from './components/OfflinePairingModal';
 
 // Subtle Web Audio tactile acoustic click
 function playAcousticTick(isOutgoing: boolean = true) {
@@ -81,7 +79,6 @@ export const App: React.FC = () => {
   // Drawers & Modals
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [showNewContactDrawer, setShowNewContactDrawer] = useState(false);
-  const [showPairingModal, setShowPairingModal] = useState(false);
   const [showPeerDetails, setShowPeerDetails] = useState(false);
 
   // Searches
@@ -121,7 +118,7 @@ export const App: React.FC = () => {
     document.documentElement.setAttribute('data-font-size', savedFs);
     document.documentElement.setAttribute('data-bubble-style', savedBs);
 
-    // Auto-detect online / offline
+    // Auto-detect online / offline seamlessly with zero manual toggles
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
@@ -136,7 +133,7 @@ export const App: React.FC = () => {
         setActiveCallSession(session);
       };
 
-      // Listen for incoming real-time messages across ALL transports (WebRTC, Supabase Realtime, BroadcastChannel)
+      // 1. Listen for incoming real-time messages across ALL transports (WebRTC, Supabase Realtime, BroadcastChannel)
       TransportManager.onIncomingMessage = (newMsg: Message) => {
         console.log('Incoming real-time message received:', newMsg);
         playAcousticTick(false);
@@ -165,7 +162,7 @@ export const App: React.FC = () => {
             };
             return updated.sort((a, b) => b.updatedAt - a.updatedAt);
           } else {
-            // New conversation discovered
+            // New conversation discovered in real-time
             const brandNewConv: Conversation = {
               id: newMsg.conversationId,
               type: 'direct',
@@ -178,6 +175,25 @@ export const App: React.FC = () => {
             return [brandNewConv, ...prev];
           }
         });
+      };
+
+      // 2. Real-time Reaction Updates
+      TransportManager.onReactionUpdate = (msgId, reactions) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === msgId ? { ...m, reactions } : m))
+        );
+      };
+
+      // 3. Real-time Message Deletions
+      TransportManager.onDeleteMessage = (msgId) => {
+        setMessages((prev) => prev.filter((m) => m.id !== msgId));
+      };
+
+      // 4. Real-time Clear History
+      TransportManager.onClearHistory = (conversationId) => {
+        if (activeConversationIdRef.current === conversationId) {
+          setMessages([]);
+        }
       };
 
       const user = await IdentityService.getActiveProfile();
@@ -332,7 +348,7 @@ export const App: React.FC = () => {
     await loadUserData(profile.id);
   };
 
-  // 4. Voice Note Recording
+  // 4. Voice Note Recording (Real Audio Blob + Base64 URL Transmission)
   const handleToggleVoiceRecord = async () => {
     if (isRecordingVoice) {
       if (!voiceRecorderRef.current || !profile || !activeConversationId) return;
@@ -353,6 +369,7 @@ export const App: React.FC = () => {
           content: 'Voice note',
           media: {
             blobKey: result.blobKey,
+            url: result.dataUrl, // Inline Base64 Data URL transmits and plays on ANY other tab/device!
             durationSeconds: result.durationSeconds,
             waveform: result.waveform,
             mimeType: result.mimeType,
@@ -387,7 +404,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // 5. Send File
+  // 5. Send File (With Real Base64 Data URL)
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !profile || !activeConversationId) return;
@@ -402,31 +419,38 @@ export const App: React.FC = () => {
       await FileTransferService.sendFileDirect(file, file.name, rtc);
     }
 
-    const fileMsg: Message = {
-      id: crypto.randomUUID(),
-      conversationId: activeConversationId,
-      senderId: profile.id,
-      senderDeviceId: profile.deviceId,
-      recipientId: peerId,
-      type: 'file',
-      content: file.name,
-      media: {
-        blobKey,
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type,
-      },
-      timestamp: Date.now(),
-      status: 'sending',
-      transport: isOnline ? 'internet_supabase' : 'offline_queued',
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onloadend = async () => {
+      const dataUrl = reader.result as string;
+
+      const fileMsg: Message = {
+        id: crypto.randomUUID(),
+        conversationId: activeConversationId,
+        senderId: profile.id,
+        senderDeviceId: profile.deviceId,
+        recipientId: peerId,
+        type: 'file',
+        content: file.name,
+        media: {
+          blobKey,
+          url: dataUrl,
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+        },
+        timestamp: Date.now(),
+        status: 'sending',
+        transport: isOnline ? 'internet_supabase' : 'offline_queued',
+      };
+
+      setMessages((prev) => [...prev, fileMsg]);
+      playAcousticTick(true);
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+
+      await TransportManager.dispatchMessage(fileMsg, peerId);
+      await loadUserData(profile.id);
     };
-
-    setMessages((prev) => [...prev, fileMsg]);
-    playAcousticTick(true);
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-
-    await TransportManager.dispatchMessage(fileMsg, peerId);
-    await loadUserData(profile.id);
   };
 
   // 6. Direct Audio Calling
@@ -453,7 +477,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // 7. Chat Modification Features: Emoji Reactions, Copy, Delete, Clear History
+  // 7. Chat Modification Features: Real-Time Emoji Reactions, Copy, Delete, Clear History
   const handleReactToMessage = async (msgId: string, emoji: string) => {
     const db = await getDatabase();
     const msg = await db.get('messages', msgId);
@@ -470,15 +494,26 @@ export const App: React.FC = () => {
       prev.map((m) => (m.id === msgId ? { ...m, reactions: updatedReactions } : m))
     );
 
-    // Broadcast reaction update over local channel
-    const bc = new BroadcastChannel('offline_mesh_chat');
-    bc.postMessage({ type: 'reaction_update', msgId, reactions: updatedReactions });
+    // Broadcast reaction update across all connected windows, tabs, and peers in real-time
+    TransportManager.broadcastEvent({
+      type: 'reaction_update',
+      msgId,
+      reactions: updatedReactions,
+      conversationId: activeConversationId,
+    });
   };
 
   const handleDeleteMessage = async (msgId: string) => {
     const db = await getDatabase();
     await db.delete('messages', msgId);
     setMessages((prev) => prev.filter((m) => m.id !== msgId));
+
+    // Broadcast deletion across all connected tabs and peers in real-time
+    TransportManager.broadcastEvent({
+      type: 'delete_message',
+      msgId,
+      conversationId: activeConversationId,
+    });
   };
 
   const handleCopyMessage = (text: string) => {
@@ -495,6 +530,13 @@ export const App: React.FC = () => {
       }
       setMessages([]);
       setShowPeerDetails(false);
+
+      // Broadcast history clear event across all tabs and peers in real-time
+      TransportManager.broadcastEvent({
+        type: 'clear_history',
+        conversationId: activeConversationId,
+      });
+
       await loadUserData(profile?.id);
     }
   };
@@ -534,32 +576,6 @@ export const App: React.FC = () => {
       {/* Acoustic Soundwave Voice Call Overlay */}
       {activeCallSession && profile && (
         <AudioCallModal session={activeCallSession} localUserId={profile.id} />
-      )}
-
-      {/* Offline Direct Device Pairing Modal (Zero Internet) */}
-      {showPairingModal && profile && (
-        <OfflinePairingModal
-          localUserId={profile.id}
-          localUserName={profile.displayName}
-          onClose={() => setShowPairingModal(false)}
-          onConnectedPeer={async (peerId, peerName) => {
-            setShowPairingModal(false);
-            const existing = contacts.find((c) => c.id === peerId);
-            if (!existing) {
-              const newContact: Contact = {
-                id: peerId,
-                displayName: peerName,
-                username: peerName.toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'offline_peer',
-                phoneNumber: 'Offline Direct Mesh',
-                isBlocked: false,
-                lastSeen: Date.now(),
-              };
-              setContacts((prev) => [newContact, ...prev]);
-              const db = await getDatabase();
-              await db.put('contacts', newContact);
-            }
-          }}
-        />
       )}
 
       {/* ==========================================================================
@@ -623,15 +639,7 @@ export const App: React.FC = () => {
           </div>
 
           <div className="header-tools-cluster">
-            {/* Offline Direct Pairing Button */}
-            <button
-              type="button"
-              className="icon-button-lux direct-pair-btn"
-              onClick={() => setShowPairingModal(true)}
-              title="Offline Direct Device Pairing (Hotspot / LAN)"
-            >
-              <WifiOff size={18} />
-            </button>
+            {/* Clean action buttons: New Chat and Settings */}
             <button
               type="button"
               className="icon-button-lux new-chat-btn"

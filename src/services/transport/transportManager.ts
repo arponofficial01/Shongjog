@@ -24,6 +24,9 @@ export class TransportManager {
   private static broadcastChannel: BroadcastChannel | null = null;
 
   public static onIncomingMessage?: (msg: Message) => void;
+  public static onReactionUpdate?: (msgId: string, reactions: { [emoji: string]: number }) => void;
+  public static onDeleteMessage?: (msgId: string) => void;
+  public static onClearHistory?: (conversationId: string) => void;
 
   public static init() {
     window.addEventListener('online', () => this.notifyStatusChange());
@@ -34,8 +37,52 @@ export class TransportManager {
     try {
       this.broadcastChannel = new BroadcastChannel('offline_mesh_chat');
       this.broadcastChannel.onmessage = async (event) => {
-        const msg: Message = event.data;
-        if (msg && msg.id) {
+        const data = event.data;
+        if (!data) return;
+
+        // Check if event is a reaction update
+        if (data.type === 'reaction_update') {
+          console.log('BroadcastChannel reaction update:', data);
+          const db = await getDatabase();
+          const m = await db.get('messages', data.msgId);
+          if (m) {
+            m.reactions = data.reactions;
+            await db.put('messages', m);
+          }
+          if (this.onReactionUpdate) {
+            this.onReactionUpdate(data.msgId, data.reactions);
+          }
+          return;
+        }
+
+        // Check if event is a delete message
+        if (data.type === 'delete_message') {
+          console.log('BroadcastChannel delete message:', data);
+          const db = await getDatabase();
+          await db.delete('messages', data.msgId);
+          if (this.onDeleteMessage) {
+            this.onDeleteMessage(data.msgId);
+          }
+          return;
+        }
+
+        // Check if event is clear history
+        if (data.type === 'clear_history') {
+          console.log('BroadcastChannel clear history:', data);
+          const db = await getDatabase();
+          const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
+          for (const m of allMsgs) {
+            await db.delete('messages', m.id);
+          }
+          if (this.onClearHistory) {
+            this.onClearHistory(data.conversationId);
+          }
+          return;
+        }
+
+        // Standard chat message
+        const msg: Message = data.message || data;
+        if (msg && msg.id && msg.conversationId) {
           console.log('Local BroadcastChannel message received:', msg);
           const db = await getDatabase();
           await db.put('messages', msg);
@@ -49,11 +96,29 @@ export class TransportManager {
       console.warn('BroadcastChannel not available', e);
     }
 
-    // 2. Setup Supabase Realtime incoming message listener
+    // 2. Setup Supabase Realtime listeners
     SupabaseRealtimeService.onMessageReceived = async (msg) => {
       console.log('Supabase Realtime incoming message:', msg);
       if (this.onIncomingMessage) {
         this.onIncomingMessage(msg);
+      }
+    };
+
+    SupabaseRealtimeService.onReactionReceived = (msgId, reactions) => {
+      if (this.onReactionUpdate) {
+        this.onReactionUpdate(msgId, reactions);
+      }
+    };
+
+    SupabaseRealtimeService.onDeleteReceived = (msgId) => {
+      if (this.onDeleteMessage) {
+        this.onDeleteMessage(msgId);
+      }
+    };
+
+    SupabaseRealtimeService.onClearHistoryReceived = (conversationId) => {
+      if (this.onClearHistory) {
+        this.onClearHistory(conversationId);
       }
     };
 
@@ -67,6 +132,20 @@ export class TransportManager {
         this.onIncomingMessage(msg);
       }
     };
+  }
+
+  /**
+   * Broadcasts an event (reaction, delete, clear history) across all active transports
+   */
+  public static broadcastEvent(event: any) {
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage(event);
+      } catch (err) {
+        console.warn('BroadcastChannel post error', err);
+      }
+    }
+    SupabaseRealtimeService.getInstance().broadcastMeshEvent(event);
   }
 
   public static registerPeerConnected(peerId: string) {

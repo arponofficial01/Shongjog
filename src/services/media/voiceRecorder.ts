@@ -7,6 +7,7 @@ import { saveMediaBlob } from '../db/database';
 export interface VoiceRecordingResult {
   blobKey: string;
   blob: Blob;
+  dataUrl: string;
   durationSeconds: number;
   waveform: number[];
   mimeType: string;
@@ -130,13 +131,19 @@ export class VoiceRecorder {
           // Downsample waveform to standard 24 points for neat UI display
           const normalizedWaveform = this.downsampleWaveform(this.waveformData, 24);
 
-          resolve({
-            blobKey,
-            blob: audioBlob,
-            durationSeconds: Math.max(1, this.durationSeconds),
-            waveform: normalizedWaveform,
-            mimeType,
-          });
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = () => {
+            const dataUrl = (reader.result as string) || '';
+            resolve({
+              blobKey,
+              blob: audioBlob,
+              dataUrl,
+              durationSeconds: Math.max(1, this.durationSeconds),
+              waveform: normalizedWaveform,
+              mimeType,
+            });
+          };
         } catch (err) {
           reject(err);
         }

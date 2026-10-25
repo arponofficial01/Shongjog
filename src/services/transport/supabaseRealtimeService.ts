@@ -13,10 +13,13 @@ import { CallManager } from '../call/callManager';
 export class SupabaseRealtimeService {
   private static instance: SupabaseRealtimeService | null = null;
   private channel: RealtimeChannel | null = null;
+  private meshChannel: RealtimeChannel | null = null;
   private currentUserId: string | null = null;
 
   public static onMessageReceived?: (message: Message) => void;
-  public static onPresenceUpdate?: (onlineUserIds: string[]) => void;
+  public static onReactionReceived?: (msgId: string, reactions: { [emoji: string]: number }) => void;
+  public static onDeleteReceived?: (msgId: string) => void;
+  public static onClearHistoryReceived?: (conversationId: string) => void;
 
   public static getInstance(): SupabaseRealtimeService {
     if (!this.instance) {
@@ -39,13 +42,17 @@ export class SupabaseRealtimeService {
     this.currentUserId = userId;
     const supabase = getSupabase();
 
-    // Clean up previous channel if any
+    // Clean up previous channels
     if (this.channel) {
       await supabase.removeChannel(this.channel);
       this.channel = null;
     }
+    if (this.meshChannel) {
+      await supabase.removeChannel(this.meshChannel);
+      this.meshChannel = null;
+    }
 
-    // Subscribe to user-specific inbox channel
+    // 1. User-specific inbox channel
     const channelName = `shongjog_inbox_${userId}`;
     this.channel = supabase.channel(channelName, {
       config: {
@@ -54,7 +61,7 @@ export class SupabaseRealtimeService {
       },
     });
 
-    // 1. Listen for incoming direct messages
+    // Listen for direct messages
     this.channel.on('broadcast', { event: 'chat_message' }, async (event) => {
       const msg: Message = event.payload;
       if (!msg || !msg.id) return;
@@ -66,7 +73,7 @@ export class SupabaseRealtimeService {
       }
     });
 
-    // 2. Listen for WebRTC Signaling (Offers, Answers, ICE candidates)
+    // Listen for WebRTC Signaling (Offers, Answers, ICE candidates)
     this.channel.on('broadcast', { event: 'webrtc_signal' }, (event) => {
       const signal: SignalingMessage = event.payload;
       if (!signal || signal.targetId !== userId) return;
@@ -76,7 +83,7 @@ export class SupabaseRealtimeService {
       rtc.handleIncomingSignalingMessage(signal);
     });
 
-    // 3. Listen for Incoming Audio Calls
+    // Listen for Incoming Audio Calls
     this.channel.on('broadcast', { event: 'call_request' }, (event) => {
       const callData = event.payload;
       if (!callData || callData.targetId !== userId) return;
@@ -85,7 +92,7 @@ export class SupabaseRealtimeService {
       CallManager.getInstance().handleIncomingCallRequest(callData);
     });
 
-    // 4. Listen for Call Response (Accept / Reject)
+    // Listen for Call Response (Accept / Reject)
     this.channel.on('broadcast', { event: 'call_response' }, (event) => {
       const callData = event.payload;
       if (!callData || callData.targetId !== userId) return;
@@ -94,7 +101,7 @@ export class SupabaseRealtimeService {
       CallManager.getInstance().handleCallResponse(callData);
     });
 
-    // 5. Listen for Call End
+    // Listen for Call End
     this.channel.on('broadcast', { event: 'call_end' }, (event) => {
       const callData = event.payload;
       if (!callData || callData.targetId !== userId) return;
@@ -103,7 +110,7 @@ export class SupabaseRealtimeService {
       CallManager.getInstance().endCall(false);
     });
 
-    // Subscribe and track presence
+    // Subscribe user channel
     this.channel.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         console.log(`Live Supabase Realtime connected on ${channelName}`);
@@ -115,10 +122,69 @@ export class SupabaseRealtimeService {
       }
     });
 
-    // Also wire WebRTCService signaling delegate so any WebRTC calls use this Supabase channel
+    // 2. Mesh Events Channel (Reactions, Deletions, Clear History)
+    this.meshChannel = supabase.channel('shongjog_mesh_events', {
+      config: { broadcast: { self: false } },
+    });
+
+    this.meshChannel.on('broadcast', { event: 'mesh_action' }, async (event) => {
+      const data = event.payload;
+      if (!data) return;
+
+      if (data.type === 'reaction_update') {
+        const db = await getDatabase();
+        const m = await db.get('messages', data.msgId);
+        if (m) {
+          m.reactions = data.reactions;
+          await db.put('messages', m);
+        }
+        if (SupabaseRealtimeService.onReactionReceived) {
+          SupabaseRealtimeService.onReactionReceived(data.msgId, data.reactions);
+        }
+      } else if (data.type === 'delete_message') {
+        const db = await getDatabase();
+        await db.delete('messages', data.msgId);
+        if (SupabaseRealtimeService.onDeleteReceived) {
+          SupabaseRealtimeService.onDeleteReceived(data.msgId);
+        }
+      } else if (data.type === 'clear_history') {
+        const db = await getDatabase();
+        const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
+        for (const m of allMsgs) {
+          await db.delete('messages', m.id);
+        }
+        if (SupabaseRealtimeService.onClearHistoryReceived) {
+          SupabaseRealtimeService.onClearHistoryReceived(data.conversationId);
+        }
+      }
+    });
+
+    this.meshChannel.subscribe();
+
+    // Wire WebRTC signaling delegate
     WebRTCService.globalSignalingDelegate = (sig) => {
       this.sendSignalingMessage(sig);
     };
+  }
+
+  /**
+   * Broadcasts mesh action (reactions, deletes, clear history) to all peers
+   */
+  public async broadcastMeshEvent(eventPayload: any): Promise<void> {
+    const { isConfigured } = getSupabaseConfig();
+    if (!isConfigured) return;
+
+    try {
+      const supabase = getSupabase();
+      const channel = supabase.channel('shongjog_mesh_events');
+      await channel.send({
+        type: 'broadcast',
+        event: 'mesh_action',
+        payload: eventPayload,
+      });
+    } catch (err) {
+      console.warn('Mesh event broadcast error', err);
+    }
   }
 
   /**
@@ -133,14 +199,13 @@ export class SupabaseRealtimeService {
     const targetChannel = supabase.channel(recipientChannelName);
 
     try {
-      // Send broadcast event
       const res = await targetChannel.send({
         type: 'broadcast',
         event: 'chat_message',
         payload: message,
       });
 
-      // Also attempt async cloud persistence to PostgreSQL if tables exist
+      // Also attempt async cloud persistence to PostgreSQL
       this.persistToDatabase(message).catch((e) => {
         console.debug('Postgres table write skipped (using Realtime WebSocket):', e.message);
       });
@@ -211,9 +276,6 @@ export class SupabaseRealtimeService {
     }
   }
 
-  /**
-   * Attempts Postgres table insertion
-   */
   private async persistToDatabase(message: Message): Promise<void> {
     const supabase = getSupabase();
     await supabase.from('messages').insert({
