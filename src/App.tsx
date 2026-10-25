@@ -19,6 +19,11 @@ import {
   X,
   Info,
   MoreVertical,
+  Pin,
+  VolumeX,
+  Archive,
+  Mail,
+  MailCheck,
 } from 'lucide-react';
 
 import { getDatabase } from './services/db/database';
@@ -42,6 +47,7 @@ import { AudioCallModal } from './components/AudioCallModal';
 import { ContactModal } from './components/ContactModal';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ProfileSetupModal } from './components/ProfileSetupModal';
+import { CustomConfirmModal } from './components/CustomConfirmModal';
 
 // Subtle Web Audio tactile acoustic click
 function playAcousticTick(isOutgoing: boolean = true) {
@@ -86,7 +92,8 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [inChatSearchQuery, setInChatSearchQuery] = useState('');
   const [showInChatSearch, setShowInChatSearch] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'direct'>('all');
+  // Active Filter
+  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'archived'>('all');
 
   // Messaging Input
   const [inputText, setInputText] = useState('');
@@ -96,8 +103,51 @@ export const App: React.FC = () => {
   // Audio Call
   const [activeCallSession, setActiveCallSession] = useState<ActiveCallSession | null>(null);
 
-  // Message Three-Dot/Three-Line Options Menu
+  // Menus & Dropdowns
   const [activeMenuMsgId, setActiveMenuMsgId] = useState<string | null>(null);
+  const [activeChatMenuId, setActiveChatMenuId] = useState<string | null>(null);
+  const [showTopbarMenu, setShowTopbarMenu] = useState<boolean>(false);
+
+  // Custom In-App Modal Dialog (Zero native browser confirm/alert)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    isDanger?: boolean;
+    isAlertOnly?: boolean;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
+
+  const showConfirmDialog = (opts: {
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    isDanger?: boolean;
+    isAlertOnly?: boolean;
+    onConfirm: () => void;
+  }) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: opts.title,
+      message: opts.message,
+      confirmLabel: opts.confirmLabel,
+      cancelLabel: opts.cancelLabel,
+      isDanger: opts.isDanger,
+      isAlertOnly: opts.isAlertOnly,
+      onConfirm: () => {
+        opts.onConfirm();
+        setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+      },
+    });
+  };
 
   // Refs
   const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
@@ -110,9 +160,13 @@ export const App: React.FC = () => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  // Click outside closes active message menu
+  // Click outside closes all active dropdown menus
   useEffect(() => {
-    const handleCloseMenu = () => setActiveMenuMsgId(null);
+    const handleCloseMenu = () => {
+      setActiveMenuMsgId(null);
+      setActiveChatMenuId(null);
+      setShowTopbarMenu(false);
+    };
     window.addEventListener('click', handleCloseMenu);
     return () => window.removeEventListener('click', handleCloseMenu);
   }, []);
@@ -420,7 +474,13 @@ export const App: React.FC = () => {
         setIsRecordingVoice(true);
         setRecordingSeconds(0);
       } catch (err) {
-        alert('Microphone permission is required to record voice notes.');
+        showConfirmDialog({
+          title: 'Microphone Permission Needed',
+          message: 'Microphone permission is required to record voice notes in this browser.',
+          isAlertOnly: true,
+          confirmLabel: 'Understood',
+          onConfirm: () => {},
+        });
       }
     }
   };
@@ -494,7 +554,13 @@ export const App: React.FC = () => {
         isOnline ? 'internet_supabase' : 'direct_webrtc_lan'
       );
     } catch (err: any) {
-      alert(err.message || 'Cannot start audio call');
+      showConfirmDialog({
+        title: 'Cannot Start Audio Call',
+        message: err.message || 'The audio call could not be initiated at this moment.',
+        isAlertOnly: true,
+        confirmLabel: 'Dismiss',
+        onConfirm: () => {},
+      });
     }
   };
 
@@ -543,48 +609,106 @@ export const App: React.FC = () => {
 
   const handleClearChatHistory = async () => {
     if (!activeConversationId) return;
-    if (confirm('Clear all messages in this conversation?')) {
-      const db = await getDatabase();
-      const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', activeConversationId);
-      for (const m of allMsgs) {
-        await db.delete('messages', m.id);
-      }
-      setMessages([]);
-      setShowPeerDetails(false);
-
-      // Broadcast history clear event across all tabs and peers in real-time
-      TransportManager.broadcastEvent({
-        type: 'clear_history',
-        conversationId: activeConversationId,
-      });
-
-      await loadUserData(profile?.id);
-    }
-  };
-
-  const handleDeleteConversation = async (convId: string) => {
-    if (!confirm('Are you sure you want to permanently delete this entire chat and all its messages?')) return;
-    try {
-      const db = await getDatabase();
-      await db.delete('conversations', convId);
-      const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', convId);
-      for (const m of allMsgs) {
-        await db.delete('messages', m.id);
-      }
-      setConversations((prev) => prev.filter((c) => c.id !== convId));
-      if (activeConversationId === convId) {
-        setActiveConversationId(null);
+    showConfirmDialog({
+      title: 'Clear Chat History?',
+      message: 'All messages in this conversation will be permanently removed from your local device and encrypted mesh.',
+      confirmLabel: 'Clear History',
+      isDanger: true,
+      onConfirm: async () => {
+        const db = await getDatabase();
+        const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', activeConversationId);
+        for (const m of allMsgs) {
+          await db.delete('messages', m.id);
+        }
         setMessages([]);
         setShowPeerDetails(false);
-      }
-      // Broadcast deletion across all connected tabs and peers in real-time
-      TransportManager.broadcastEvent({
-        type: 'delete_conversation',
-        conversationId: convId,
-      });
-    } catch (err) {
-      console.error('Failed to delete conversation', err);
-    }
+
+        // Broadcast history clear event across all tabs and peers in real-time
+        TransportManager.broadcastEvent({
+          type: 'clear_history',
+          conversationId: activeConversationId,
+        });
+
+        await loadUserData(profile?.id);
+      },
+    });
+  };
+
+  const handleDeleteConversation = (convId: string) => {
+    showConfirmDialog({
+      title: 'Delete Entire Conversation?',
+      message: 'This conversation and all its messages will be permanently deleted from your device and your peer’s timeline.',
+      confirmLabel: 'Delete Chat',
+      isDanger: true,
+      onConfirm: async () => {
+        try {
+          const db = await getDatabase();
+          await db.delete('conversations', convId);
+          const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', convId);
+          for (const m of allMsgs) {
+            await db.delete('messages', m.id);
+          }
+          setConversations((prev) => prev.filter((c) => c.id !== convId));
+          if (activeConversationId === convId) {
+            setActiveConversationId(null);
+            setMessages([]);
+            setShowPeerDetails(false);
+          }
+          TransportManager.broadcastEvent({
+            type: 'delete_conversation',
+            conversationId: convId,
+          });
+        } catch (err) {
+          console.error('Failed to delete conversation', err);
+        }
+      },
+    });
+  };
+
+  // Chat Actions: Pin, Archive, Mute, Mark as Unread
+  const handleTogglePinConversation = async (convId: string) => {
+    const db = await getDatabase();
+    const conv = await db.get('conversations', convId);
+    if (!conv) return;
+    conv.isPinned = !conv.isPinned;
+    await db.put('conversations', conv);
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, isPinned: conv.isPinned } : c))
+    );
+  };
+
+  const handleToggleArchiveConversation = async (convId: string) => {
+    const db = await getDatabase();
+    const conv = await db.get('conversations', convId);
+    if (!conv) return;
+    conv.isArchived = !conv.isArchived;
+    await db.put('conversations', conv);
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, isArchived: conv.isArchived } : c))
+    );
+  };
+
+  const handleToggleMuteConversation = async (convId: string) => {
+    const db = await getDatabase();
+    const conv = await db.get('conversations', convId);
+    if (!conv) return;
+    conv.isMuted = !conv.isMuted;
+    await db.put('conversations', conv);
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, isMuted: conv.isMuted } : c))
+    );
+  };
+
+  const handleToggleUnreadConversation = async (convId: string) => {
+    const db = await getDatabase();
+    const conv = await db.get('conversations', convId);
+    if (!conv) return;
+    const nextUnread = (conv.unreadCount || 0) > 0 ? 0 : 1;
+    conv.unreadCount = nextUnread;
+    await db.put('conversations', conv);
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, unreadCount: nextUnread } : c))
+    );
   };
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
@@ -628,12 +752,13 @@ export const App: React.FC = () => {
           LEFT SIDEBAR: Shongjog Brand Header, Search, Filter Tabs, Chat Stream
           ========================================================================== */}
       <aside className="shongjog-sidebar">
-        {/* Settings Drawer (Theme Picker, Wallpaper, Font Scale, etc.) */}
+        {/* Settings Drawer (Multi-view navigation: Themes, Chat, Audio, Language, etc.) */}
         {showSettingsDrawer && profile && (
           <SettingsPanel
             profile={profile}
             onBack={() => setShowSettingsDrawer(false)}
             onLanguageChange={() => setLangTick((t) => t + 1)}
+            onRequestConfirm={showConfirmDialog}
             onProfileReset={() => {
               IdentityService.logout();
               setProfile(null);
@@ -736,10 +861,10 @@ export const App: React.FC = () => {
           </button>
           <button
             type="button"
-            className={`filter-tab-chip ${activeFilter === 'direct' ? 'active' : ''}`}
-            onClick={() => setActiveFilter('direct')}
+            className={`filter-tab-chip ${activeFilter === 'archived' ? 'active' : ''}`}
+            onClick={() => setActiveFilter('archived')}
           >
-            Direct Mesh
+            Archived
           </button>
         </div>
 
@@ -747,7 +872,12 @@ export const App: React.FC = () => {
         <div className="sidebar-chat-stream">
           {conversations
             .filter((c) => {
-              if (activeFilter === 'unread' && c.unreadCount === 0) return false;
+              if (activeFilter === 'archived') {
+                return Boolean(c.isArchived);
+              }
+              if (c.isArchived) return false;
+              if (activeFilter === 'unread' && (c.unreadCount || 0) === 0) return false;
+
               if (searchQuery.trim()) {
                 const q = searchQuery.toLowerCase();
                 const peerId = c.participantIds.find((id) => id !== profile?.id);
@@ -759,16 +889,24 @@ export const App: React.FC = () => {
               }
               return true;
             })
+            .sort((a, b) => {
+              const aPin = a.isPinned ? 1 : 0;
+              const bPin = b.isPinned ? 1 : 0;
+              if (aPin !== bPin) return bPin - aPin;
+              return b.updatedAt - a.updatedAt;
+            })
             .map((conv) => {
               const peerId = conv.participantIds.find((id) => id !== profile?.id);
               const contact = contacts.find((c) => c.id === peerId);
               const name = contact?.displayName || conv.name || 'Contact';
               const isSelected = activeConversationId === conv.id;
+              const isMenuOpen = activeChatMenuId === conv.id;
 
               return (
                 <div
                   key={conv.id}
                   className={`chat-card-lux ${isSelected ? 'active' : ''}`}
+                  style={{ position: 'relative' }}
                   onClick={() => {
                     setActiveConversationId(conv.id);
                     loadMessages(conv.id);
@@ -784,6 +922,16 @@ export const App: React.FC = () => {
                         {name}
                         {contact?.username && (
                           <span className="chat-card-username">@{contact.username}</span>
+                        )}
+                        {conv.isPinned && (
+                          <span className="chat-card-pin-indicator" title="Pinned Chat">
+                            <Pin size={12} />
+                          </span>
+                        )}
+                        {conv.isMuted && (
+                          <span className="chat-card-muted-indicator" title="Muted">
+                            <VolumeX size={12} />
+                          </span>
                         )}
                       </span>
                       <span className="chat-card-timestamp">
@@ -804,17 +952,103 @@ export const App: React.FC = () => {
                         {conv.unreadCount > 0 && (
                           <span className="chat-unread-pill">{conv.unreadCount}</span>
                         )}
-                        <button
-                          type="button"
-                          className="chat-card-delete-hover"
-                          title="Delete Entire Chat"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteConversation(conv.id);
-                          }}
-                        >
-                          <Trash2 size={13} />
-                        </button>
+
+                        {/* 3-Dot Options Trigger */}
+                        <div style={{ position: 'relative' }}>
+                          <button
+                            type="button"
+                            className={`chat-card-options-trigger ${isMenuOpen ? 'active' : ''}`}
+                            title="Chat Options"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveChatMenuId(isMenuOpen ? null : conv.id);
+                            }}
+                          >
+                            <MoreVertical size={14} />
+                          </button>
+
+                          {isMenuOpen && (
+                            <div
+                              className="chat-card-options-menu"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="context-menu-item"
+                                onClick={() => {
+                                  handleTogglePinConversation(conv.id);
+                                  setActiveChatMenuId(null);
+                                }}
+                              >
+                                <Pin size={13} />
+                                <span>{conv.isPinned ? 'Unpin Chat' : 'Pin to Top'}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="context-menu-item"
+                                onClick={() => {
+                                  handleToggleUnreadConversation(conv.id);
+                                  setActiveChatMenuId(null);
+                                }}
+                              >
+                                {conv.unreadCount > 0 ? <MailCheck size={13} /> : <Mail size={13} />}
+                                <span>{conv.unreadCount > 0 ? 'Mark as Read' : 'Mark as Unread'}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="context-menu-item"
+                                onClick={() => {
+                                  handleToggleMuteConversation(conv.id);
+                                  setActiveChatMenuId(null);
+                                }}
+                              >
+                                <VolumeX size={13} />
+                                <span>{conv.isMuted ? 'Unmute' : 'Mute Notifications'}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="context-menu-item"
+                                onClick={() => {
+                                  handleToggleArchiveConversation(conv.id);
+                                  setActiveChatMenuId(null);
+                                }}
+                              >
+                                <Archive size={13} />
+                                <span>{conv.isArchived ? 'Unarchive Chat' : 'Archive Chat'}</span>
+                              </button>
+
+                              <div style={{ height: 1, background: 'var(--border-glass)', margin: '4px 0' }} />
+
+                              <button
+                                type="button"
+                                className="context-menu-item"
+                                onClick={() => {
+                                  setActiveConversationId(conv.id);
+                                  handleClearChatHistory();
+                                  setActiveChatMenuId(null);
+                                }}
+                              >
+                                <Trash2 size={13} />
+                                <span>Clear History</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="context-menu-item danger"
+                                onClick={() => {
+                                  handleDeleteConversation(conv.id);
+                                  setActiveChatMenuId(null);
+                                }}
+                              >
+                                <Trash2 size={13} />
+                                <span>Delete Chat</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -894,26 +1128,118 @@ export const App: React.FC = () => {
                   <Phone size={19} />
                 </button>
 
-                {/* Info / Options */}
-                <button
-                  type="button"
-                  className="icon-button-lux"
-                  onClick={() => setShowPeerDetails(!showPeerDetails)}
-                  title="Chat Details & Clear History"
-                >
-                  <Info size={18} />
-                </button>
+                {/* 3-Dot Conversation Options Dropdown */}
+                <div style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    className={`icon-button-lux ${showTopbarMenu ? 'active' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowTopbarMenu(!showTopbarMenu);
+                    }}
+                    title="Conversation Options"
+                  >
+                    <MoreVertical size={18} />
+                  </button>
 
-                {/* Delete Full Chat */}
-                <button
-                  type="button"
-                  className="icon-button-lux"
-                  onClick={() => activeConversationId && handleDeleteConversation(activeConversationId)}
-                  title="Delete Entire Chat"
-                  style={{ color: 'var(--rose-danger)' }}
-                >
-                  <Trash2 size={18} />
-                </button>
+                  {showTopbarMenu && (
+                    <div
+                      className="chat-card-options-menu"
+                      style={{ top: '48px', right: '0' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="context-menu-item"
+                        onClick={() => {
+                          setShowPeerDetails(true);
+                          setShowTopbarMenu(false);
+                        }}
+                      >
+                        <Info size={14} />
+                        <span>Contact Info</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="context-menu-item"
+                        onClick={() => {
+                          setShowInChatSearch(true);
+                          setShowTopbarMenu(false);
+                        }}
+                      >
+                        <Search size={14} />
+                        <span>Search in Chat</span>
+                      </button>
+
+                      {activeConversation && (
+                        <>
+                          <button
+                            type="button"
+                            className="context-menu-item"
+                            onClick={() => {
+                              handleTogglePinConversation(activeConversation.id);
+                              setShowTopbarMenu(false);
+                            }}
+                          >
+                            <Pin size={14} />
+                            <span>{activeConversation.isPinned ? 'Unpin Chat' : 'Pin to Top'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="context-menu-item"
+                            onClick={() => {
+                              handleToggleMuteConversation(activeConversation.id);
+                              setShowTopbarMenu(false);
+                            }}
+                          >
+                            <VolumeX size={14} />
+                            <span>{activeConversation.isMuted ? 'Unmute' : 'Mute Notifications'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="context-menu-item"
+                            onClick={() => {
+                              handleToggleArchiveConversation(activeConversation.id);
+                              setShowTopbarMenu(false);
+                            }}
+                          >
+                            <Archive size={14} />
+                            <span>{activeConversation.isArchived ? 'Unarchive Chat' : 'Archive Chat'}</span>
+                          </button>
+                        </>
+                      )}
+
+                      <div style={{ height: 1, background: 'var(--border-glass)', margin: '4px 0' }} />
+
+                      <button
+                        type="button"
+                        className="context-menu-item"
+                        onClick={() => {
+                          handleClearChatHistory();
+                          setShowTopbarMenu(false);
+                        }}
+                      >
+                        <Trash2 size={14} />
+                        <span>Clear History</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="context-menu-item danger"
+                        onClick={() => {
+                          if (activeConversationId) handleDeleteConversation(activeConversationId);
+                          setShowTopbarMenu(false);
+                        }}
+                      >
+                        <Trash2 size={14} />
+                        <span>Delete Conversation</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1284,6 +1610,19 @@ export const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* Global In-App Custom Confirm & Alert Modal */}
+      <CustomConfirmModal
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmLabel={confirmDialog.confirmLabel}
+        cancelLabel={confirmDialog.cancelLabel}
+        isDanger={confirmDialog.isDanger}
+        isAlertOnly={confirmDialog.isAlertOnly}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

@@ -42,6 +42,9 @@ export interface Conversation {
   unreadCount: number;
   draftText?: string;
   updatedAt: number;
+  isPinned?: boolean;
+  isArchived?: boolean;
+  isMuted?: boolean;
 }
 
 export interface MessageMedia {

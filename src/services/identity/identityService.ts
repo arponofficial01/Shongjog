@@ -200,4 +200,42 @@ export class IdentityService {
     await db.put('contacts', contact);
     return contact.isBlocked;
   }
+
+  /**
+   * Searches live registered profiles on Supabase by username, phone, or name
+   */
+  public static async searchGlobalProfiles(query: string): Promise<Array<{
+    id: string;
+    phoneNumber: string;
+    username: string;
+    displayName: string;
+    publicKey?: string;
+  }>> {
+    const clean = query.trim().toLowerCase().replace(/[@+]/g, '');
+    if (!clean) return [];
+
+    const { isConfigured } = getSupabaseConfig();
+    if (!navigator.onLine || !isConfigured) return [];
+
+    try {
+      const supabase = getSupabase();
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, phone_number, username, display_name, public_key')
+        .or(`username.ilike.%${clean}%,phone_number.ilike.%${clean}%,display_name.ilike.%${clean}%`)
+        .limit(12);
+
+      if (error || !data) return [];
+      return data.map((d: any) => ({
+        id: d.id,
+        phoneNumber: d.phone_number,
+        username: d.username,
+        displayName: d.display_name,
+        publicKey: d.public_key,
+      }));
+    } catch (err) {
+      console.warn('Could not search global profiles', err);
+      return [];
+    }
+  }
 }
