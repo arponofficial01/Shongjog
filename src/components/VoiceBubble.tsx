@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, Mic, User } from 'lucide-react';
+import { Play, Pause } from 'lucide-react';
 import { getMediaBlob } from '../services/db/database';
 
 interface VoiceBubbleProps {
@@ -15,7 +15,6 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   mediaUrl,
   durationSeconds = 0,
   waveform = [],
-  isOutgoing = false,
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -100,7 +99,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   const activeBarIndex = Math.floor(progressRatio * bars.length);
 
   return (
-    <div className="wa-voice-message">
+    <div className="lux-voice-card">
       {audioUrl && (
         <audio
           ref={audioRef}
@@ -110,43 +109,30 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
         />
       )}
 
-      {/* WhatsApp Voice Avatar with Green Mic Badge */}
-      <div className="wa-voice-avatar-circle">
-        <User size={22} color="#8696a0" />
-        <div className="wa-voice-mic-badge">
-          <Mic size={10} color="white" />
-        </div>
-      </div>
-
       <button
         type="button"
-        className="wa-voice-play-btn"
+        className="lux-voice-play"
         onClick={togglePlay}
         title={isPlaying ? 'Pause' : 'Play'}
       >
-        {isPlaying ? <Pause size={24} /> : <Play size={24} style={{ marginLeft: 2 }} />}
+        {isPlaying ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: 2 }} />}
       </button>
 
-      {/* WhatsApp Waveform Slider */}
-      <div className="wa-voice-waveform-container">
+      <div className="lux-voice-bars">
         {bars.map((height, idx) => (
           <div
             key={idx}
-            className={`wa-voice-bar ${idx <= activeBarIndex ? 'active' : ''}`}
+            className={`lux-bar ${idx <= activeBarIndex ? 'active' : ''}`}
             style={{
-              height: `${Math.max(15, Math.min(100, height))}%`,
-              backgroundColor: idx <= activeBarIndex
-                ? '#53bdeb'
-                : isOutgoing
-                ? 'rgba(255, 255, 255, 0.4)'
-                : 'rgba(134, 150, 160, 0.5)',
+              height: `${Math.max(18, Math.min(100, height))}%`,
+              opacity: idx <= activeBarIndex ? 1 : 0.45,
             }}
           />
         ))}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-        <span style={{ fontSize: '11px', color: '#8696a0', fontVariantNumeric: 'tabular-nums' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.75)', fontVariantNumeric: 'tabular-nums' }}>
           {formatSeconds(isPlaying ? currentTime : durationSeconds)}
         </span>
 
@@ -157,10 +143,10 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
             style={{
               fontSize: '10px',
               fontWeight: 700,
-              backgroundColor: 'rgba(255, 255, 255, 0.15)',
-              padding: '1px 4px',
-              borderRadius: '8px',
-              color: '#e9edef',
+              backgroundColor: 'rgba(255, 255, 255, 0.18)',
+              padding: '1px 5px',
+              borderRadius: '6px',
+              color: 'white',
             }}
           >
             {playbackSpeed}x

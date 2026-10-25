@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
 import { IdentityService } from '../services/identity/identityService';
 import type { UserProfile } from '../services/db/database';
 
@@ -17,16 +18,15 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
     setError('');
 
     if (!phoneNumber.trim()) {
-      setError('Please enter your phone number');
+      setError('Please enter your mobile number');
       return;
     }
 
     if (!displayName.trim()) {
-      setError('Please enter your name');
+      setError('Please enter your full name');
       return;
     }
 
-    // Auto-generate username from phone if not provided
     const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
     const generatedUsername = 'user_' + cleanPhone.slice(-6);
 
@@ -50,59 +50,69 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: '#111b21',
+        backgroundColor: 'rgba(6, 9, 14, 0.95)',
+        backdropFilter: 'blur(32px)',
         zIndex: 100,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '20px',
+        padding: '24px',
       }}
     >
       <div
         style={{
           width: '100%',
-          maxWidth: '440px',
+          maxWidth: '460px',
+          background: 'rgba(15, 23, 42, 0.75)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '24px',
+          padding: '40px 36px',
+          boxShadow: '0 25px 60px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1)',
           textAlign: 'center',
         }}
       >
-        {/* WhatsApp Logo Graphic */}
+        {/* Contact Luxury Brand Mark */}
         <div
           style={{
-            width: 80,
-            height: 80,
-            borderRadius: '50%',
-            backgroundColor: '#00a884',
-            margin: '0 auto 24px',
+            width: 72,
+            height: 72,
+            borderRadius: '22px',
+            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+            margin: '0 auto 20px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            color: 'white',
+            boxShadow: '0 8px 30px rgba(16, 185, 129, 0.45)',
           }}
         >
-          <svg
-            viewBox="0 0 24 24"
-            width="44"
-            height="44"
-            fill="white"
-          >
-            <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2z" />
-          </svg>
+          <Sparkles size={36} />
         </div>
 
-        <h1 style={{ fontSize: '28px', fontWeight: 400, color: '#e9edef', marginBottom: 12 }}>
-          Welcome to WhatsApp
+        <h1
+          style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: '28px',
+            fontWeight: 700,
+            color: '#f8fafc',
+            letterSpacing: '-0.5px',
+            marginBottom: 8,
+          }}
+        >
+          Contact Network
         </h1>
-        <p style={{ fontSize: '14px', color: '#8696a0', marginBottom: 32, lineHeight: 1.5 }}>
-          Enter your phone number and profile name to start chatting with your contacts.
+        <p style={{ fontSize: '14px', color: '#94a3b8', lineHeight: 1.6, marginBottom: 30 }}>
+          Initialize your private identity to start communicating seamlessly across all networks.
         </p>
 
         {error && (
           <div
             style={{
-              padding: '10px 14px',
-              backgroundColor: 'rgba(234, 0, 56, 0.15)',
-              border: '1px solid #ea0038',
-              borderRadius: '6px',
-              color: '#ff859b',
+              padding: '11px 14px',
+              backgroundColor: 'rgba(244, 63, 94, 0.12)',
+              border: '1px solid rgba(244, 63, 94, 0.3)',
+              borderRadius: '10px',
+              color: '#fda4af',
               fontSize: '13px',
               marginBottom: 20,
               textAlign: 'left',
@@ -112,9 +122,9 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20, textAlign: 'left' }}>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 18, textAlign: 'left' }}>
           <div>
-            <label style={{ fontSize: '12px', color: '#00a884', display: 'block', marginBottom: 6, fontWeight: 500 }}>
+            <label style={{ fontSize: '12px', fontWeight: 600, color: '#34d399', display: 'block', marginBottom: 8, letterSpacing: '0.4px' }}>
               PHONE NUMBER
             </label>
             <input
@@ -122,37 +132,21 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               placeholder="+880 1712 345678"
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value)}
-              style={{
-                width: '100%',
-                background: '#202c33',
-                border: '1px solid #2a3942',
-                borderRadius: '8px',
-                padding: '12px 14px',
-                fontSize: '16px',
-                color: '#e9edef',
-              }}
+              className="lux-text-input"
               required
             />
           </div>
 
           <div>
-            <label style={{ fontSize: '12px', color: '#00a884', display: 'block', marginBottom: 6, fontWeight: 500 }}>
-              YOUR NAME
+            <label style={{ fontSize: '12px', fontWeight: 600, color: '#34d399', display: 'block', marginBottom: 8, letterSpacing: '0.4px' }}>
+              YOUR DISPLAY NAME
             </label>
             <input
               type="text"
               placeholder="e.g. Tanvir Ahmed"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              style={{
-                width: '100%',
-                background: '#202c33',
-                border: '1px solid #2a3942',
-                borderRadius: '8px',
-                padding: '12px 14px',
-                fontSize: '16px',
-                color: '#e9edef',
-              }}
+              className="lux-text-input"
               required
             />
           </div>
@@ -160,25 +154,33 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
           <button
             type="submit"
             disabled={isLoading}
+            className="lux-primary-btn"
             style={{
-              width: '100%',
-              padding: '13px',
-              backgroundColor: '#00a884',
-              borderRadius: '24px',
-              color: '#111b21',
-              fontWeight: 600,
-              fontSize: '15px',
-              marginTop: 12,
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
+              marginTop: 10,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
             }}
           >
-            {isLoading ? 'Connecting...' : 'Agree & Continue'}
+            <span>{isLoading ? 'Setting up identity...' : 'Get Started'}</span>
+            <ArrowRight size={18} />
           </button>
         </form>
 
-        <div style={{ marginTop: 36, fontSize: '12px', color: '#667781' }}>
-          🔒 End-to-end encrypted messaging & calls
+        <div
+          style={{
+            marginTop: 26,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            fontSize: '12px',
+            color: '#64748b',
+          }}
+        >
+          <ShieldCheck size={15} color="#10b981" />
+          End-to-end encrypted hardware keys
         </div>
       </div>
     </div>

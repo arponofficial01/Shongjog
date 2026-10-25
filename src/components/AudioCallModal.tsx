@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, Volume2 } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, ShieldCheck } from 'lucide-react';
 import { CallManager } from '../services/call/callManager';
 import type { ActiveCallSession } from '../services/call/callManager';
 
@@ -40,33 +40,57 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUs
   const isIncomingRinging = session.direction === 'incoming' && session.state === 'ringing';
 
   return (
-    <div className="wa-call-overlay">
-      <div style={{ fontSize: '13px', color: '#8696a0', letterSpacing: '0.5px' }}>
-        WhatsApp Voice Call
+    <div className="lux-call-overlay">
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: '12px',
+          fontWeight: 600,
+          color: '#34d399',
+          letterSpacing: '0.8px',
+          textTransform: 'uppercase',
+          background: 'rgba(16, 185, 129, 0.1)',
+          padding: '6px 16px',
+          borderRadius: '9999px',
+          border: '1px solid rgba(16, 185, 129, 0.25)',
+        }}
+      >
+        <ShieldCheck size={14} />
+        Encrypted Direct Voice Call
       </div>
 
-      <div className="wa-call-peer-container">
-        <div className="wa-call-avatar-large">
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18 }}>
+        <div className="call-avatar-lux">
           {session.peerName.charAt(0).toUpperCase()}
         </div>
-        <div className="wa-call-peer-name">{session.peerName}</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 700, color: '#f8fafc' }}>
+          {session.peerName}
+        </div>
         {session.peerPhone && (
-          <div style={{ color: '#8696a0', fontSize: '14px' }}>{session.peerPhone}</div>
+          <div style={{ color: '#94a3b8', fontSize: '14px', letterSpacing: '0.3px' }}>
+            {session.peerPhone}
+          </div>
         )}
 
-        <div className="wa-call-status-text">
+        <div style={{ fontSize: '15px', color: '#38bdf8', fontWeight: 500 }}>
           {session.state === 'calling' && 'Calling...'}
           {session.state === 'ringing' && 'Incoming Call...'}
-          {session.state === 'connected' && formatDuration(session.durationSeconds)}
+          {session.state === 'connected' && (
+            <span style={{ color: '#34d399', fontVariantNumeric: 'tabular-nums' }}>
+              Connected • {formatDuration(session.durationSeconds)}
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="wa-call-controls">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 20 }}>
         {isIncomingRinging ? (
           <>
             <button
               type="button"
-              className="wa-call-circle-btn end"
+              className="lux-call-btn end"
               onClick={handleReject}
               title="Decline"
             >
@@ -74,7 +98,7 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUs
             </button>
             <button
               type="button"
-              className="wa-call-circle-btn accept"
+              className="lux-call-btn accept"
               onClick={handleAccept}
               title="Accept"
             >
@@ -85,9 +109,9 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUs
           <>
             <button
               type="button"
-              className={`wa-call-circle-btn mute ${isSpeaker ? 'active' : ''}`}
+              className={`lux-call-btn mute ${isSpeaker ? 'active' : ''}`}
               onClick={() => setIsSpeaker(!isSpeaker)}
-              title="Speaker"
+              title="Speakerphone"
             >
               <Volume2 size={24} />
             </button>
@@ -95,7 +119,7 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUs
             {session.state === 'connected' && (
               <button
                 type="button"
-                className={`wa-call-circle-btn mute ${isMuted ? 'active' : ''}`}
+                className={`lux-call-btn mute ${isMuted ? 'active' : ''}`}
                 onClick={handleToggleMute}
                 title={isMuted ? 'Unmute' : 'Mute'}
               >
@@ -105,7 +129,7 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUs
 
             <button
               type="button"
-              className="wa-call-circle-btn end"
+              className="lux-call-btn end"
               onClick={handleEndCall}
               title="End call"
             >

@@ -1,21 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  MessageSquarePlus,
-  MoreVertical,
+  UserPlus,
+  Settings,
   Search,
   Phone,
-  Video,
   Paperclip,
-  Smile,
   Mic,
   Send,
   Check,
   CheckCheck,
   Clock,
   ArrowLeft,
-  Lock,
+  ShieldCheck,
   FileText,
-  CircleDashed,
+  Radio,
+  Zap,
 } from 'lucide-react';
 
 import { getDatabase } from './services/db/database';
@@ -40,28 +39,28 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ProfileSetupModal } from './components/ProfileSetupModal';
 
 export const App: React.FC = () => {
-  // --- User Profile & Navigation ---
+  // --- Profile & Navigation State ---
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
 
-  // Data Collections
+  // Collections
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
 
-  // Drawers & Modals
+  // Drawers
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [showNewContactDrawer, setShowNewContactDrawer] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'groups'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'direct'>('all');
 
-  // Input & Messaging State
+  // Messaging Input
   const [inputText, setInputText] = useState('');
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
 
-  // Calling State
+  // Audio Call
   const [activeCallSession, setActiveCallSession] = useState<ActiveCallSession | null>(null);
 
   // Refs
@@ -69,18 +68,16 @@ export const App: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 1. Initial App Load
+  // 1. App Startup
   useEffect(() => {
     async function initApp() {
       TransportManager.init();
 
-      // Listen for incoming call sessions
       const callMgr = CallManager.getInstance();
       callMgr.onSessionChange = (session) => {
         setActiveCallSession(session);
       };
 
-      // Load active profile
       const user = await IdentityService.getActiveProfile();
       if (user) {
         setProfile(user);
@@ -92,12 +89,11 @@ export const App: React.FC = () => {
     initApp();
   }, []);
 
-  // 2. Load contacts and conversations from IndexedDB
+  // 2. Load contacts & conversations
   const loadUserData = async (_userId?: string) => {
     const db = await getDatabase();
     let storedContacts = await db.getAll('contacts');
 
-    // If fresh install with 0 contacts, add friendly demo contacts so user immediately sees WhatsApp chats
     if (storedContacts.length === 0) {
       const demoContacts: Contact[] = [
         {
@@ -106,7 +102,7 @@ export const App: React.FC = () => {
           displayName: 'Tanvir Ahmed',
           username: 'tanvir_bd',
           isBlocked: false,
-          lastSeen: Date.now() - 1000 * 60 * 5,
+          lastSeen: Date.now() - 1000 * 60 * 3,
         },
         {
           id: 'demo_2',
@@ -114,15 +110,15 @@ export const App: React.FC = () => {
           displayName: 'Nusrat Jahan',
           username: 'nusrat_j',
           isBlocked: false,
-          lastSeen: Date.now() - 1000 * 60 * 30,
+          lastSeen: Date.now() - 1000 * 60 * 20,
         },
         {
           id: 'demo_3',
           phoneNumber: '+880 1911 223344',
-          displayName: 'Dhaka Tech Group',
-          username: 'dhaka_tech',
+          displayName: 'Dhaka Direct Mesh',
+          username: 'dhaka_mesh',
           isBlocked: false,
-          lastSeen: Date.now() - 1000 * 60 * 120,
+          lastSeen: Date.now() - 1000 * 60 * 60,
         },
       ];
       for (const c of demoContacts) {
@@ -139,19 +135,19 @@ export const App: React.FC = () => {
           id: 'conv_1',
           type: 'direct',
           participantIds: [_userId || '', storedContacts[0].id],
-          lastMessageSnippet: 'Assalamu Alaikum! Are you free for a quick call?',
-          lastMessageTimestamp: Date.now() - 1000 * 60 * 5,
+          lastMessageSnippet: 'Assalamu Alaikum! Ready for the offline call test?',
+          lastMessageTimestamp: Date.now() - 1000 * 60 * 3,
           unreadCount: 1,
-          updatedAt: Date.now() - 1000 * 60 * 5,
+          updatedAt: Date.now() - 1000 * 60 * 3,
         },
         {
           id: 'conv_2',
           type: 'direct',
           participantIds: [_userId || '', storedContacts[1].id],
-          lastMessageSnippet: '🎙️ Voice message (0:14)',
-          lastMessageTimestamp: Date.now() - 1000 * 60 * 45,
+          lastMessageSnippet: '🎙️ Voice note (0:12)',
+          lastMessageTimestamp: Date.now() - 1000 * 60 * 30,
           unreadCount: 0,
-          updatedAt: Date.now() - 1000 * 60 * 45,
+          updatedAt: Date.now() - 1000 * 60 * 30,
         },
       ];
       for (const conv of initialConvs) {
@@ -168,7 +164,6 @@ export const App: React.FC = () => {
     const db = await getDatabase();
     let msgs = await db.getAllFromIndex('messages', 'by-conversation', convId);
 
-    // Initial starter messages if fresh
     if (msgs.length === 0) {
       const activeConv = conversations.find((c) => c.id === convId);
       const peerId = activeConv?.participantIds.find((id) => id !== profile?.id) || 'demo_1';
@@ -180,8 +175,8 @@ export const App: React.FC = () => {
           senderDeviceId: 'peer_dev',
           recipientId: profile?.id,
           type: 'text',
-          content: 'Assalamu Alaikum! Are you free for a quick call?',
-          timestamp: Date.now() - 1000 * 60 * 10,
+          content: 'Assalamu Alaikum! Ready for the direct communication test?',
+          timestamp: Date.now() - 1000 * 60 * 8,
           status: 'read',
           transport: 'internet_supabase',
         },
@@ -198,7 +193,7 @@ export const App: React.FC = () => {
     }, 100);
   };
 
-  // 3. Send Text Message
+  // 3. Send Message
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!profile || !activeConversationId || !inputText.trim()) return;
@@ -230,7 +225,6 @@ export const App: React.FC = () => {
   // 4. Voice Note Recording
   const handleToggleVoiceRecord = async () => {
     if (isRecordingVoice) {
-      // Stop and send voice message
       if (!voiceRecorderRef.current || !profile || !activeConversationId) return;
       try {
         const result = await voiceRecorderRef.current.stopRecording();
@@ -268,7 +262,6 @@ export const App: React.FC = () => {
         setIsRecordingVoice(false);
       }
     } else {
-      // Start recording
       const recorder = new VoiceRecorder();
       voiceRecorderRef.current = recorder;
       recorder.onTimerTick = (sec) => setRecordingSeconds(sec);
@@ -324,7 +317,7 @@ export const App: React.FC = () => {
     await loadUserData(profile.id);
   };
 
-  // 6. Voice Audio Calling
+  // 6. Direct Audio Calling
   const handleStartCall = async () => {
     if (!profile || !activeConversationId) return;
     const activeConv = conversations.find((c) => c.id === activeConversationId);
@@ -348,23 +341,22 @@ export const App: React.FC = () => {
     }
   };
 
-  // Active Peer Info
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const activePeerId = activeConversation?.participantIds.find((id) => id !== profile?.id);
   const activeContact = contacts.find((c) => c.id === activePeerId);
-  const activeChatName = activeContact?.displayName || 'Chat';
+  const activeChatName = activeContact?.displayName || 'Conversation';
 
   if (isInitializing) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#111b21', color: '#00a884' }}>
-        <div style={{ fontSize: '18px', fontWeight: 500 }}>WhatsApp Web</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#06090e', color: '#10b981' }}>
+        <Radio className="animate-spin" size={32} />
       </div>
     );
   }
 
   return (
-    <div className={`whatsapp-app ${activeConversationId ? 'chat-open' : ''}`}>
-      {/* Profile Setup Modal on first visit */}
+    <div className={`contact-app-root ${activeConversationId ? 'mobile-chat-open' : ''}`}>
+      {/* Onboarding Identity Modal */}
       {!profile && (
         <ProfileSetupModal
           onProfileCreated={(newProfile) => {
@@ -374,15 +366,15 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* WhatsApp Voice Call Screen */}
+      {/* Voice Call Overlay */}
       {activeCallSession && profile && (
         <AudioCallModal session={activeCallSession} localUserId={profile.id} />
       )}
 
       {/* ==========================================================================
-          LEFT SIDEBAR (Chats List, Search, WhatsApp Drawer Panels)
+          LEFT SIDEBAR: Brand Header, Search, Filter Chips, Chat List
           ========================================================================== */}
-      <aside className="wa-sidebar">
+      <aside className="contact-sidebar">
         {/* Settings Drawer */}
         {showSettingsDrawer && profile && (
           <SettingsPanel
@@ -401,12 +393,11 @@ export const App: React.FC = () => {
             onClose={() => setShowNewContactDrawer(false)}
             onContactSaved={(contact) => {
               setContacts((prev) => [contact, ...prev]);
-              // Start chat with new contact
               const newConv: Conversation = {
                 id: crypto.randomUUID(),
                 type: 'direct',
                 participantIds: [profile?.id || '', contact.id],
-                lastMessageSnippet: 'Chat started',
+                lastMessageSnippet: 'Conversation opened',
                 lastMessageTimestamp: Date.now(),
                 unreadCount: 0,
                 updatedAt: Date.now(),
@@ -418,86 +409,88 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Sidebar Header */}
-        <div className="wa-sidebar-header">
+        {/* Brand Header */}
+        <div className="sidebar-header">
           <div
-            className="wa-header-avatar"
+            className="brand-badge"
             onClick={() => setShowSettingsDrawer(true)}
             title="Profile & Settings"
           >
-            {profile?.displayName.charAt(0).toUpperCase() || 'U'}
+            <div className="brand-icon-orb">
+              <Zap size={20} />
+            </div>
+            <div className="brand-title-group">
+              <h1>
+                Contact
+                <span className="brand-dot" />
+              </h1>
+              <span className="brand-sub">MESH NETWORK</span>
+            </div>
           </div>
 
-          <div className="wa-header-icons">
+          <div className="header-actions">
             <button
               type="button"
-              className="wa-icon-btn"
-              title="Status"
-            >
-              <CircleDashed size={20} />
-            </button>
-            <button
-              type="button"
-              className="wa-icon-btn"
+              className="circle-action-btn new-chat"
               onClick={() => setShowNewContactDrawer(true)}
               title="New Chat"
             >
-              <MessageSquarePlus size={20} />
+              <UserPlus size={18} />
             </button>
             <button
               type="button"
-              className="wa-icon-btn"
+              className="circle-action-btn"
               onClick={() => setShowSettingsDrawer(true)}
-              title="Menu"
+              title="Settings"
             >
-              <MoreVertical size={20} />
+              <Settings size={18} />
             </button>
           </div>
         </div>
 
-        {/* Search Bar & Filter Chips */}
-        <div className="wa-search-container">
-          <div className="wa-search-bar">
-            <Search size={18} color="#8696a0" />
+        {/* Search Bar */}
+        <div className="sidebar-search-box">
+          <div className="search-input-wrapper">
+            <Search size={16} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search or start new chat"
+              placeholder="Search conversations or contacts..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-
-          <div className="wa-filter-chips">
-            <button
-              type="button"
-              className={`wa-chip ${activeFilter === 'all' ? 'active' : ''}`}
-              onClick={() => setActiveFilter('all')}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              className={`wa-chip ${activeFilter === 'unread' ? 'active' : ''}`}
-              onClick={() => setActiveFilter('unread')}
-            >
-              Unread
-            </button>
-            <button
-              type="button"
-              className={`wa-chip ${activeFilter === 'groups' ? 'active' : ''}`}
-              onClick={() => setActiveFilter('groups')}
-            >
-              Groups
-            </button>
-          </div>
         </div>
 
-        {/* Conversation List */}
-        <div className="wa-chat-list">
+        {/* Filter Pills */}
+        <div className="filter-pills-row">
+          <button
+            type="button"
+            className={`filter-pill ${activeFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setActiveFilter('all')}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`filter-pill ${activeFilter === 'unread' ? 'active' : ''}`}
+            onClick={() => setActiveFilter('unread')}
+          >
+            Unread
+          </button>
+          <button
+            type="button"
+            className={`filter-pill ${activeFilter === 'direct' ? 'active' : ''}`}
+            onClick={() => setActiveFilter('direct')}
+          >
+            Direct LAN
+          </button>
+        </div>
+
+        {/* Chats Scroll Area */}
+        <div className="sidebar-chats-scroll">
           {conversations
             .filter((c) => {
               if (activeFilter === 'unread') return c.unreadCount > 0;
-              if (activeFilter === 'groups') return c.type === 'group';
               return true;
             })
             .map((conv) => {
@@ -509,20 +502,20 @@ export const App: React.FC = () => {
               return (
                 <div
                   key={conv.id}
-                  className={`wa-chat-item ${isSelected ? 'active' : ''}`}
+                  className={`chat-card ${isSelected ? 'active' : ''}`}
                   onClick={() => {
                     setActiveConversationId(conv.id);
                     loadMessages(conv.id);
                   }}
                 >
-                  <div className="wa-chat-avatar online">
+                  <div className="chat-card-avatar online">
                     {name.charAt(0).toUpperCase()}
                   </div>
 
-                  <div className="wa-chat-content">
-                    <div className="wa-chat-top-row">
-                      <span className="wa-chat-name">{name}</span>
-                      <span className={`wa-chat-time ${conv.unreadCount > 0 ? 'unread' : ''}`}>
+                  <div className="chat-card-details">
+                    <div className="chat-card-top">
+                      <span className="chat-card-name">{name}</span>
+                      <span className="chat-card-time">
                         {new Date(conv.lastMessageTimestamp).toLocaleTimeString([], {
                           hour: '2-digit',
                           minute: '2-digit',
@@ -530,14 +523,14 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <div className="wa-chat-bottom-row">
-                      <span className="wa-chat-snippet">
-                        <CheckCheck size={16} color="#53bdeb" style={{ flexShrink: 0 }} />
+                    <div className="chat-card-bottom">
+                      <span className="chat-card-preview">
+                        <CheckCheck size={15} color="#34d399" style={{ flexShrink: 0 }} />
                         {conv.lastMessageSnippet}
                       </span>
 
                       {conv.unreadCount > 0 && (
-                        <span className="wa-unread-badge">{conv.unreadCount}</span>
+                        <span className="chat-badge-count">{conv.unreadCount}</span>
                       )}
                     </div>
                   </div>
@@ -548,16 +541,14 @@ export const App: React.FC = () => {
       </aside>
 
       {/* ==========================================================================
-          RIGHT MAIN PANEL (Active Conversation or WhatsApp Welcome Screen)
+          RIGHT MAIN PANEL: Active Conversation or Executive Welcome Screen
           ========================================================================== */}
-      <main className="wa-main-panel">
-        <div className="wa-chat-wallpaper" />
-
+      <main className="contact-main">
         {activeConversationId ? (
           <>
-            {/* Conversation Header */}
-            <div className="wa-chat-header">
-              <div className="wa-contact-header-info">
+            {/* Header */}
+            <div className="main-chat-header">
+              <div className="chat-peer-info">
                 <button
                   type="button"
                   onClick={() => setActiveConversationId(null)}
@@ -567,55 +558,36 @@ export const App: React.FC = () => {
                   <ArrowLeft size={20} />
                 </button>
 
-                <div className="wa-header-avatar" style={{ width: 40, height: 40 }}>
+                <div className="chat-peer-avatar">
                   {activeChatName.charAt(0).toUpperCase()}
                 </div>
 
-                <div className="wa-contact-header-text">
-                  <div className="wa-contact-header-name">{activeChatName}</div>
-                  <div className="wa-contact-header-status">online</div>
+                <div>
+                  <div className="chat-peer-name">{activeChatName}</div>
+                  <div className="chat-peer-status">
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#10b981' }} />
+                    Direct Mesh Active
+                  </div>
                 </div>
               </div>
 
-              <div className="wa-chat-header-actions">
+              <div className="chat-header-tools">
                 <button
                   type="button"
-                  className="wa-icon-btn"
+                  className="tool-action-btn call-active"
                   onClick={handleStartCall}
-                  title="Voice Call"
+                  title="Direct Voice Call"
                 >
-                  <Phone size={20} />
-                </button>
-                <button
-                  type="button"
-                  className="wa-icon-btn"
-                  title="Video Call"
-                >
-                  <Video size={21} />
-                </button>
-                <button
-                  type="button"
-                  className="wa-icon-btn"
-                  title="Search in chat"
-                >
-                  <Search size={20} />
-                </button>
-                <button
-                  type="button"
-                  className="wa-icon-btn"
-                  title="Menu"
-                >
-                  <MoreVertical size={20} />
+                  <Phone size={18} />
                 </button>
               </div>
             </div>
 
-            {/* Messages Area */}
-            <div className="wa-messages-container">
-              {/* WhatsApp End-to-End Encryption Banner */}
-              <div className="wa-system-notice">
-                <Lock size={12} />
-                Messages and calls are end-to-end encrypted. No one outside of this chat can read or listen to them.
+            {/* Messages Flow Area */}
+            <div className="messages-flow">
+              <div className="security-ribbon">
+                <ShieldCheck size={14} color="#10b981" />
+                End-to-End Encrypted Direct Connection
               </div>
 
               {messages.map((msg) => {
@@ -624,12 +596,10 @@ export const App: React.FC = () => {
                 return (
                   <div
                     key={msg.id}
-                    className={`wa-message-row ${isOutgoing ? 'outgoing' : 'incoming'}`}
+                    className={`msg-row ${isOutgoing ? 'outgoing' : 'incoming'}`}
                   >
-                    <div className={`wa-bubble ${isOutgoing ? 'outgoing' : 'incoming'}`}>
-                      {msg.type === 'text' && (
-                        <div className="wa-bubble-text">{msg.content}</div>
-                      )}
+                    <div className={`msg-bubble ${isOutgoing ? 'outgoing' : 'incoming'}`}>
+                      {msg.type === 'text' && <div>{msg.content}</div>}
 
                       {msg.type === 'voice' && (
                         <VoiceBubble
@@ -642,13 +612,15 @@ export const App: React.FC = () => {
                       )}
 
                       {msg.type === 'file' && (
-                        <div className="wa-file-bubble">
-                          <div className="wa-file-icon-box">
+                        <div className="lux-file-card">
+                          <div className="lux-file-icon">
                             <FileText size={20} />
                           </div>
                           <div>
-                            <div className="wa-file-name">{msg.media?.fileName || 'Document'}</div>
-                            <div className="wa-file-size">
+                            <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                              {msg.media?.fileName || 'Document'}
+                            </div>
+                            <div style={{ fontSize: '11px', opacity: 0.75 }}>
                               {msg.media?.fileSize
                                 ? `${Math.round(msg.media.fileSize / 1024)} KB`
                                 : 'Attachment'}
@@ -657,8 +629,8 @@ export const App: React.FC = () => {
                         </div>
                       )}
 
-                      <div className="wa-bubble-meta">
-                        <span className="wa-bubble-time">
+                      <div className="msg-meta">
+                        <span>
                           {new Date(msg.timestamp).toLocaleTimeString([], {
                             hour: '2-digit',
                             minute: '2-digit',
@@ -667,13 +639,13 @@ export const App: React.FC = () => {
                         {isOutgoing && (
                           <span>
                             {msg.status === 'read' ? (
-                              <CheckCheck size={16} color="#53bdeb" />
+                              <CheckCheck size={15} color="#34d399" />
                             ) : msg.status === 'delivered' ? (
-                              <CheckCheck size={16} color="#8696a0" />
+                              <CheckCheck size={15} color="#94a3b8" />
                             ) : msg.status === 'sending' ? (
-                              <Clock size={12} color="#8696a0" />
+                              <Clock size={12} color="#94a3b8" />
                             ) : (
-                              <Check size={16} color="#8696a0" />
+                              <Check size={15} color="#94a3b8" />
                             )}
                           </span>
                         )}
@@ -685,8 +657,8 @@ export const App: React.FC = () => {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Bottom Message Input Bar */}
-            <form className="wa-input-bar" onSubmit={handleSendMessage}>
+            {/* Input Bar */}
+            <form className="main-chat-input-area" onSubmit={handleSendMessage}>
               <input
                 type="file"
                 ref={fileInputRef}
@@ -694,74 +666,57 @@ export const App: React.FC = () => {
                 onChange={handleFileSelected}
               />
 
-              <button type="button" className="wa-icon-btn" title="Emoji">
-                <Smile size={24} />
-              </button>
-
               <button
                 type="button"
-                className="wa-icon-btn"
-                title="Attach"
+                className="tool-action-btn"
+                title="Attach Document"
                 onClick={() => fileInputRef.current?.click()}
               >
-                <Paperclip size={24} />
+                <Paperclip size={19} />
               </button>
 
               <input
                 type="text"
-                className="wa-message-input"
-                placeholder={isRecordingVoice ? `Recording voice (${recordingSeconds}s)...` : 'Type a message'}
+                className="chat-input-pill"
+                placeholder={isRecordingVoice ? `Recording voice (${recordingSeconds}s)...` : 'Type a message...'}
                 value={inputText}
                 disabled={isRecordingVoice}
                 onChange={(e) => setInputText(e.target.value)}
               />
 
               {inputText.trim() ? (
-                <button type="submit" className="wa-send-btn" title="Send">
-                  <Send size={24} />
+                <button type="submit" className="lux-send-btn" title="Send message">
+                  <Send size={19} />
                 </button>
               ) : (
                 <button
                   type="button"
-                  className={`wa-mic-btn ${isRecordingVoice ? 'recording' : ''}`}
+                  className={`lux-mic-btn ${isRecordingVoice ? 'recording' : ''}`}
                   onClick={handleToggleVoiceRecord}
-                  title={isRecordingVoice ? 'Stop and send' : 'Voice message'}
+                  title={isRecordingVoice ? 'Stop and send' : 'Record voice note'}
                 >
-                  <Mic size={24} />
+                  <Mic size={20} />
                 </button>
               )}
             </form>
           </>
         ) : (
           /* ==========================================================================
-             WHATSAPP WEB WELCOME SCREEN (When no chat is selected)
+             EXECUTIVE WELCOME SCREEN (When no chat is selected)
              ========================================================================== */
-          <div className="wa-welcome-screen">
-            <svg
-              viewBox="0 0 300 180"
-              className="wa-welcome-graphic"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <rect x="50" y="20" width="200" height="120" rx="12" fill="#202c33" />
-              <rect x="62" y="32" width="176" height="96" rx="6" fill="#111b21" />
-              <circle cx="150" cy="80" r="28" fill="#00a884" opacity="0.2" />
-              <path
-                d="M150 64c-8.8 0-16 7.2-16 16 0 2.8.7 5.5 2.1 7.9l-2.2 8.1 8.3-2.2c2.3 1.3 4.9 2.2 7.8 2.2 8.8 0 16-7.2 16-16s-7.2-16-16-16z"
-                fill="#00a884"
-              />
-              <rect x="30" y="142" width="240" height="8" rx="4" fill="#2a3942" />
-            </svg>
+          <div className="contact-welcome-viewport">
+            <div className="welcome-crystal-badge">
+              <Radio size={42} color="#10b981" />
+            </div>
 
-            <h1 className="wa-welcome-title">WhatsApp Web</h1>
-            <p className="wa-welcome-desc">
-              Send and receive messages without keeping your phone online.<br />
-              Use WhatsApp on up to 4 linked devices and 1 phone at the same time.
+            <h1 className="welcome-heading">Contact Network</h1>
+            <p className="welcome-sub">
+              Next-generation direct communication network. Send messages, voice notes, and make real-time audio calls directly across devices.
             </p>
 
-            <div className="wa-welcome-lock">
-              <Lock size={14} />
-              End-to-end encrypted
+            <div className="welcome-encrypted-pill">
+              <ShieldCheck size={16} />
+              End-to-End Encrypted • Private Hardware Keys
             </div>
           </div>
         )}

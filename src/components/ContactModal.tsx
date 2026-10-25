@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, UserPlus } from 'lucide-react';
 import { IdentityService } from '../services/identity/identityService';
 import type { Contact } from '../services/db/database';
 
@@ -44,23 +44,23 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
   };
 
   return (
-    <div className="wa-drawer">
-      <div className="wa-drawer-header">
+    <div className="contact-drawer">
+      <div className="drawer-top-bar">
         <button type="button" onClick={onClose} style={{ color: 'white' }}>
-          <ArrowLeft size={24} />
+          <ArrowLeft size={22} />
         </button>
         <h2>New Contact</h2>
       </div>
 
-      <div className="wa-drawer-body">
+      <div className="drawer-scroll-body">
         {error && (
           <div
             style={{
-              padding: '10px 14px',
-              backgroundColor: 'rgba(234, 0, 56, 0.15)',
-              border: '1px solid #ea0038',
-              borderRadius: '6px',
-              color: '#ff859b',
+              padding: '11px 14px',
+              backgroundColor: 'rgba(244, 63, 94, 0.12)',
+              border: '1px solid rgba(244, 63, 94, 0.3)',
+              borderRadius: '10px',
+              color: '#fda4af',
               fontSize: '13px',
               marginBottom: 20,
             }}
@@ -70,11 +70,11 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
         )}
 
         <form onSubmit={handleSubmit}>
-          <div className="wa-drawer-field">
-            <label>PHONE NUMBER</label>
+          <div className="lux-form-field">
+            <label>MOBILE NUMBER</label>
             <input
               type="tel"
-              className="wa-drawer-input"
+              className="lux-text-input"
               placeholder="+880 1712 345678"
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value)}
@@ -82,11 +82,11 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
             />
           </div>
 
-          <div className="wa-drawer-field">
-            <label>NAME</label>
+          <div className="lux-form-field">
+            <label>FULL NAME</label>
             <input
               type="text"
-              className="wa-drawer-input"
+              className="lux-text-input"
               placeholder="e.g. Rafiqul Islam"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
@@ -94,8 +94,14 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
             />
           </div>
 
-          <button type="submit" disabled={isSaving} className="wa-drawer-btn">
-            {isSaving ? 'Saving...' : 'Add Contact & Message'}
+          <button
+            type="submit"
+            disabled={isSaving}
+            className="lux-primary-btn"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14 }}
+          >
+            <UserPlus size={18} />
+            <span>{isSaving ? 'Saving...' : 'Add Contact & Message'}</span>
           </button>
         </form>
       </div>
