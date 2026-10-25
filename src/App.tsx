@@ -15,6 +15,10 @@ import {
   FileText,
   Radio,
   WifiOff,
+  Copy,
+  Trash2,
+  X,
+  Info,
 } from 'lucide-react';
 
 import { getDatabase } from './services/db/database';
@@ -40,11 +44,33 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ProfileSetupModal } from './components/ProfileSetupModal';
 import { OfflinePairingModal } from './components/OfflinePairingModal';
 
+// Subtle Web Audio tactile acoustic click
+function playAcousticTick(isOutgoing: boolean = true) {
+  try {
+    if (localStorage.getItem('shongjog_sound_fx') === 'false') return;
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(isOutgoing ? 680 : 840, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(isOutgoing ? 420 : 920, ctx.currentTime + 0.04);
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.04);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.05);
+  } catch (e) {
+    // Ignore audio context block if user hasn't interacted yet
+  }
+}
+
 export const App: React.FC = () => {
   // --- Profile & Navigation State ---
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [, setLangTick] = useState(0);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   // Collections
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -56,7 +82,12 @@ export const App: React.FC = () => {
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [showNewContactDrawer, setShowNewContactDrawer] = useState(false);
   const [showPairingModal, setShowPairingModal] = useState(false);
+  const [showPeerDetails, setShowPeerDetails] = useState(false);
+
+  // Searches
   const [searchQuery, setSearchQuery] = useState('');
+  const [inChatSearchQuery, setInChatSearchQuery] = useState('');
+  const [showInChatSearch, setShowInChatSearch] = useState(false);
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'direct'>('all');
 
   // Messaging Input
@@ -78,8 +109,24 @@ export const App: React.FC = () => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  // 1. App Startup & Realtime Subscriptions
+  // 1. App Startup, Auto-Detect Network, & Realtime Subscriptions
   useEffect(() => {
+    // Apply persisted theme attributes to HTML
+    const savedTheme = localStorage.getItem('shongjog_theme') || 'emerald';
+    const savedWp = localStorage.getItem('shongjog_wallpaper') || 'aurora';
+    const savedFs = localStorage.getItem('shongjog_font_size') || 'standard';
+    const savedBs = localStorage.getItem('shongjog_bubble_style') || 'squircle';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    document.documentElement.setAttribute('data-wallpaper', savedWp);
+    document.documentElement.setAttribute('data-font-size', savedFs);
+    document.documentElement.setAttribute('data-bubble-style', savedBs);
+
+    // Auto-detect online / offline
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     async function initApp() {
       TransportManager.init();
 
@@ -91,7 +138,8 @@ export const App: React.FC = () => {
 
       // Listen for incoming real-time messages across ALL transports (WebRTC, Supabase Realtime, BroadcastChannel)
       TransportManager.onIncomingMessage = (newMsg: Message) => {
-        console.log('Incoming message handled in UI:', newMsg);
+        console.log('Incoming real-time message received:', newMsg);
+        playAcousticTick(false);
 
         // Update messages state if active conversation matches
         if (activeConversationIdRef.current === newMsg.conversationId) {
@@ -143,6 +191,11 @@ export const App: React.FC = () => {
     }
 
     initApp();
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   // 2. Load contacts & conversations
@@ -267,11 +320,12 @@ export const App: React.FC = () => {
       content: inputText.trim(),
       timestamp: Date.now(),
       status: 'sending',
-      transport: 'internet_supabase',
+      transport: isOnline ? 'internet_supabase' : 'offline_queued',
     };
 
     setInputText('');
     setMessages((prev) => [...prev, newMsg]);
+    playAcousticTick(true);
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
     await TransportManager.dispatchMessage(newMsg, peerId);
@@ -305,10 +359,11 @@ export const App: React.FC = () => {
           },
           timestamp: Date.now(),
           status: 'sending',
-          transport: 'internet_supabase',
+          transport: isOnline ? 'internet_supabase' : 'offline_queued',
         };
 
         setMessages((prev) => [...prev, voiceMsg]);
+        playAcousticTick(true);
         setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
         await TransportManager.dispatchMessage(voiceMsg, peerId);
@@ -363,10 +418,11 @@ export const App: React.FC = () => {
       },
       timestamp: Date.now(),
       status: 'sending',
-      transport: 'internet_supabase',
+      transport: isOnline ? 'internet_supabase' : 'offline_queued',
     };
 
     setMessages((prev) => [...prev, fileMsg]);
+    playAcousticTick(true);
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
     await TransportManager.dispatchMessage(fileMsg, peerId);
@@ -390,10 +446,56 @@ export const App: React.FC = () => {
         peerId,
         name,
         contact?.phoneNumber,
-        'direct_webrtc_lan'
+        isOnline ? 'internet_supabase' : 'direct_webrtc_lan'
       );
     } catch (err: any) {
       alert(err.message || 'Cannot start audio call');
+    }
+  };
+
+  // 7. Chat Modification Features: Emoji Reactions, Copy, Delete, Clear History
+  const handleReactToMessage = async (msgId: string, emoji: string) => {
+    const db = await getDatabase();
+    const msg = await db.get('messages', msgId);
+    if (!msg) return;
+
+    const currentReactions = msg.reactions || {};
+    const currentCount = currentReactions[emoji] || 0;
+    const updatedReactions = { ...currentReactions, [emoji]: currentCount + 1 };
+    msg.reactions = updatedReactions;
+
+    await db.put('messages', msg);
+
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, reactions: updatedReactions } : m))
+    );
+
+    // Broadcast reaction update over local channel
+    const bc = new BroadcastChannel('offline_mesh_chat');
+    bc.postMessage({ type: 'reaction_update', msgId, reactions: updatedReactions });
+  };
+
+  const handleDeleteMessage = async (msgId: string) => {
+    const db = await getDatabase();
+    await db.delete('messages', msgId);
+    setMessages((prev) => prev.filter((m) => m.id !== msgId));
+  };
+
+  const handleCopyMessage = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+
+  const handleClearChatHistory = async () => {
+    if (!activeConversationId) return;
+    if (confirm('Clear all messages in this conversation?')) {
+      const db = await getDatabase();
+      const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', activeConversationId);
+      for (const m of allMsgs) {
+        await db.delete('messages', m.id);
+      }
+      setMessages([]);
+      setShowPeerDetails(false);
+      await loadUserData(profile?.id);
     }
   };
 
@@ -401,6 +503,12 @@ export const App: React.FC = () => {
   const activePeerId = activeConversation?.participantIds.find((id) => id !== profile?.id);
   const activeContact = contacts.find((c) => c.id === activePeerId);
   const activeChatName = activeContact?.displayName || 'Conversation';
+
+  // Filter active messages by in-chat search query if active
+  const displayedMessages = messages.filter((m) => {
+    if (!showInChatSearch || !inChatSearchQuery.trim()) return true;
+    return m.content.toLowerCase().includes(inChatSearchQuery.toLowerCase());
+  });
 
   if (isInitializing) {
     return (
@@ -458,7 +566,7 @@ export const App: React.FC = () => {
           LEFT SIDEBAR: Shongjog Brand Header, Search, Filter Tabs, Chat Stream
           ========================================================================== */}
       <aside className="shongjog-sidebar">
-        {/* Settings Drawer */}
+        {/* Settings Drawer (Theme Picker, Wallpaper, Font Scale, etc.) */}
         {showSettingsDrawer && profile && (
           <SettingsPanel
             profile={profile}
@@ -498,7 +606,7 @@ export const App: React.FC = () => {
           <div
             className="brand-section-box"
             onClick={() => setShowSettingsDrawer(true)}
-            title="Profile & Settings"
+            title="Profile, Theme & Customization Settings"
           >
             <div className="brand-logo-orb">
               <Radio size={22} />
@@ -508,7 +616,9 @@ export const App: React.FC = () => {
                 Shongjog
                 <span className="brand-bengali-script">সংযোগ</span>
               </div>
-              <span className="brand-tagline-text">DIRECT MESH</span>
+              <span className="brand-tagline-text">
+                {isOnline ? 'AUTO-SYNC MESH' : 'OFFLINE P2P MESH'}
+              </span>
             </div>
           </div>
 
@@ -518,7 +628,7 @@ export const App: React.FC = () => {
               type="button"
               className="icon-button-lux direct-pair-btn"
               onClick={() => setShowPairingModal(true)}
-              title="Offline Direct Device Pairing (Zero Internet Hotspot / LAN)"
+              title="Offline Direct Device Pairing (Hotspot / LAN)"
             >
               <WifiOff size={18} />
             </button>
@@ -534,7 +644,7 @@ export const App: React.FC = () => {
               type="button"
               className="icon-button-lux"
               onClick={() => setShowSettingsDrawer(true)}
-              title="Settings"
+              title="Settings & Themes"
             >
               <Settings size={18} />
             </button>
@@ -632,7 +742,7 @@ export const App: React.FC = () => {
 
                     <div className="chat-card-row-bottom">
                       <span className="chat-card-snippet-text">
-                        <CheckCheck size={14} color="#34d399" style={{ flexShrink: 0 }} />
+                        <CheckCheck size={14} color="var(--accent-light)" style={{ flexShrink: 0 }} />
                         {conv.lastMessageSnippet}
                       </span>
 
@@ -655,10 +765,17 @@ export const App: React.FC = () => {
           <>
             {/* Active Conversation Topbar */}
             <div className="main-chat-topbar">
-              <div className="peer-profile-cluster">
+              <div
+                className="peer-profile-cluster"
+                onClick={() => setShowPeerDetails(!showPeerDetails)}
+                title="View Contact & Chat Details"
+              >
                 <button
                   type="button"
-                  onClick={() => setActiveConversationId(null)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveConversationId(null);
+                  }}
                   style={{ display: 'none', marginRight: 4 }}
                   className="mobile-back-btn"
                 >
@@ -677,13 +794,30 @@ export const App: React.FC = () => {
                     )}
                   </div>
                   <div className="peer-connectivity-status">
-                    <span className="pulse-beacon-dot" />
-                    Direct Mesh Active
+                    <span
+                      className="pulse-beacon-dot"
+                      style={{
+                        backgroundColor: isOnline ? 'var(--accent-main)' : '#fbbf24',
+                        boxShadow: isOnline ? '0 0 8px var(--accent-main)' : '0 0 8px #fbbf24',
+                      }}
+                    />
+                    {isOnline ? 'Online Mesh Active' : 'Offline Direct Mesh'}
                   </div>
                 </div>
               </div>
 
               <div className="chat-topbar-tools">
+                {/* In-Chat Search Button */}
+                <button
+                  type="button"
+                  className="icon-button-lux"
+                  onClick={() => setShowInChatSearch(!showInChatSearch)}
+                  title="Search inside this chat"
+                >
+                  <Search size={18} />
+                </button>
+
+                {/* Direct Voice Call */}
                 <button
                   type="button"
                   className="topbar-call-button"
@@ -692,17 +826,51 @@ export const App: React.FC = () => {
                 >
                   <Phone size={19} />
                 </button>
+
+                {/* Info / Options */}
+                <button
+                  type="button"
+                  className="icon-button-lux"
+                  onClick={() => setShowPeerDetails(!showPeerDetails)}
+                  title="Chat Details & Clear History"
+                >
+                  <Info size={18} />
+                </button>
               </div>
             </div>
+
+            {/* In-Chat Search Tray */}
+            {showInChatSearch && (
+              <div className="in-chat-search-tray">
+                <Search size={16} color="var(--accent-light)" />
+                <input
+                  type="text"
+                  placeholder="Search messages in this conversation..."
+                  value={inChatSearchQuery}
+                  autoFocus
+                  onChange={(e) => setInChatSearchQuery(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInChatSearch(false);
+                    setInChatSearchQuery('');
+                  }}
+                  style={{ color: '#94a3b8' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            )}
 
             {/* Messages Scroll Area */}
             <div className="messages-stream-container">
               <div className="encryption-security-ribbon">
-                <ShieldCheck size={14} color="#10b981" />
-                End-to-End Encrypted Direct Connection
+                <ShieldCheck size={14} color="var(--accent-light)" />
+                End-to-End Encrypted • {isOnline ? 'Auto-Sync Active' : 'Air-Gapped Direct P2P'}
               </div>
 
-              {messages.map((msg) => {
+              {displayedMessages.map((msg) => {
                 const isOutgoing = msg.senderId === profile?.id;
 
                 return (
@@ -710,6 +878,36 @@ export const App: React.FC = () => {
                     key={msg.id}
                     className={`bubble-row ${isOutgoing ? 'outgoing' : 'incoming'}`}
                   >
+                    {/* Hover Reaction & Actions Dock */}
+                    <div className="msg-hover-action-dock">
+                      {['❤️', '👍', '😂', '🔥', '😮', '🙏'].map((emoji) => (
+                        <span
+                          key={emoji}
+                          className="reaction-dock-emoji"
+                          onClick={() => handleReactToMessage(msg.id, emoji)}
+                          title={`React with ${emoji}`}
+                        >
+                          {emoji}
+                        </span>
+                      ))}
+                      <button
+                        type="button"
+                        className="action-dock-btn"
+                        onClick={() => handleCopyMessage(msg.content)}
+                        title="Copy Text"
+                      >
+                        <Copy size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="action-dock-btn"
+                        onClick={() => handleDeleteMessage(msg.id)}
+                        title="Delete Message"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+
                     <div className={`chat-bubble-shell ${isOutgoing ? 'outgoing' : 'incoming'}`}>
                       {msg.type === 'text' && <div>{msg.content}</div>}
 
@@ -751,7 +949,7 @@ export const App: React.FC = () => {
                         {isOutgoing && (
                           <span>
                             {msg.status === 'read' ? (
-                              <CheckCheck size={14} color="#34d399" />
+                              <CheckCheck size={14} color="var(--accent-light)" />
                             ) : msg.status === 'delivered' ? (
                               <CheckCheck size={14} color="#94a3b8" />
                             ) : msg.status === 'sending' ? (
@@ -763,6 +961,22 @@ export const App: React.FC = () => {
                         )}
                       </div>
                     </div>
+
+                    {/* Reactions Pill Display Under Bubble */}
+                    {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                      <div className="bubble-reactions-cluster">
+                        {Object.entries(msg.reactions).map(([emoji, count]) => (
+                          <div
+                            key={emoji}
+                            className="reaction-pill-badge"
+                            onClick={() => handleReactToMessage(msg.id, emoji)}
+                          >
+                            <span>{emoji}</span>
+                            <span>{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -811,6 +1025,85 @@ export const App: React.FC = () => {
                 </button>
               )}
             </form>
+
+            {/* Peer Details & Chat Modification Drawer */}
+            {showPeerDetails && (
+              <div className="peer-details-drawer">
+                <div className="peer-details-header">
+                  <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Contact Info</h3>
+                  <button type="button" onClick={() => setShowPeerDetails(false)}>
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="peer-details-body">
+                  <div style={{ textAlign: 'center', padding: '10px 0' }}>
+                    <div
+                      style={{
+                        width: 78,
+                        height: 78,
+                        borderRadius: 'var(--radius-sm)',
+                        background: 'var(--brand-orb-grad)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '32px',
+                        color: 'white',
+                        fontWeight: 700,
+                        margin: '0 auto 12px',
+                        boxShadow: '0 8px 24px var(--accent-glow)',
+                      }}
+                    >
+                      {activeChatName.charAt(0).toUpperCase()}
+                    </div>
+                    <div style={{ fontSize: '18px', fontWeight: 600, color: 'white' }}>
+                      {activeChatName}
+                    </div>
+                    {activeContact?.username && (
+                      <div style={{ fontSize: '13px', color: 'var(--accent-light)', marginTop: 2 }}>
+                        @{activeContact.username}
+                      </div>
+                    )}
+                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: 4 }}>
+                      {activeContact?.phoneNumber || 'Direct Peer'}
+                    </div>
+                  </div>
+
+                  {/* Actions List */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <button
+                      type="button"
+                      className="peer-action-card-btn"
+                      onClick={() => {
+                        setShowInChatSearch(true);
+                        setShowPeerDetails(false);
+                      }}
+                    >
+                      <Search size={16} />
+                      <span>Search in Conversation</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="peer-action-card-btn"
+                      onClick={handleStartCall}
+                    >
+                      <Phone size={16} />
+                      <span>Start Audio Call</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="peer-action-card-btn danger"
+                      onClick={handleClearChatHistory}
+                    >
+                      <Trash2 size={16} />
+                      <span>Clear Chat History</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           /* ==========================================================================
@@ -818,19 +1111,19 @@ export const App: React.FC = () => {
              ========================================================================== */
           <div className="shongjog-welcome-view">
             <div className="welcome-floating-badge">
-              <Radio size={44} color="#10b981" />
+              <Radio size={44} color="var(--accent-light)" />
             </div>
 
             <h1 className="welcome-title-primary">
-              Shongjog <span style={{ fontFamily: 'var(--font-bangla)', color: 'var(--emerald-light)', fontSize: '26px' }}>সংযোগ</span>
+              Shongjog <span style={{ fontFamily: 'var(--font-bangla)', color: 'var(--accent-light)', fontSize: '26px' }}>সংযোগ</span>
             </h1>
             <p className="welcome-desc-paragraph">
-              Next-generation direct communication network with unique @usernames. Send messages, voice notes, and make real-time audio calls directly across devices with hardware-grade cryptographic privacy.
+              Next-generation direct communication network with dedicated @usernames. Send messages, voice notes, and make real-time audio calls directly across devices with hardware-grade cryptographic privacy.
             </p>
 
             <div className="welcome-security-capsule">
               <ShieldCheck size={16} />
-              End-to-End Encrypted • Hardware Cryptographic Keys
+              End-to-End Encrypted • {isOnline ? 'Live Mesh' : 'Air-Gapped Offline Mesh'}
             </div>
           </div>
         )}

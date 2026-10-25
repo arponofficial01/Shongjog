@@ -70,6 +70,7 @@ export interface Message {
   ackTimestamp?: number;
   signature?: string;
   isDeliveredDirectOffline?: boolean;
+  reactions?: { [emoji: string]: number };
 }
 
 export interface OutboxItem {
