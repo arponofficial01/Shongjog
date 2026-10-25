@@ -7,24 +7,40 @@ const ACTIVE_USER_ID_KEY = 'contact_app_active_user_id';
 
 export class IdentityService {
   /**
-   * Validates a Bangladesh phone number format.
-   * Expected: +8801[3-9]XXXXXXXX (11 digits local: 013-019XXXXXXXX)
+   * Validates a Bangladesh mobile phone number.
+   * Expected operators: 017/013 (GP), 018 (Robi), 019/014 (Banglalink), 016 (Airtel), 015 (Teletalk).
    */
-  public static validateBangladeshPhone(phone: string): { isValid: boolean; formatted: string; error?: string } {
-    let clean = phone.replace(/[\s-]/g, '');
+  public static validateBangladeshPhone(phone: string): {
+    isValid: boolean;
+    formatted: string;
+    operator?: string;
+    error?: string;
+  } {
+    let clean = phone.replace(/[\s\-()]/g, '');
     if (clean.startsWith('00880')) clean = '+' + clean.substring(2);
     if (clean.startsWith('880')) clean = '+' + clean;
     if (clean.startsWith('01')) clean = '+880' + clean.substring(1);
 
-    const bdRegex = /^\+8801[3-9]\d{8}$/;
-    if (!bdRegex.test(clean)) {
+    const bdRegex = /^\+880(1[3-9]\d{8})$/;
+    const match = clean.match(bdRegex);
+    if (!match) {
       return {
         isValid: false,
         formatted: clean,
-        error: 'Please enter a valid Bangladesh phone number (e.g., 01712345678 or +8801712345678)',
+        error: 'Invalid Bangladeshi mobile number. Must be an 11-digit number from GP (017/013), Robi (018), Banglalink (019/014), Airtel (016), or Teletalk (015).',
       };
     }
-    return { isValid: true, formatted: clean };
+
+    const local11 = '0' + match[1];
+    const prefix = local11.substring(0, 3);
+    let operator = 'Bangladesh Mobile Network';
+    if (prefix === '017' || prefix === '013') operator = 'Grameenphone';
+    else if (prefix === '018') operator = 'Robi';
+    else if (prefix === '016') operator = 'Airtel';
+    else if (prefix === '019' || prefix === '014') operator = 'Banglalink';
+    else if (prefix === '015') operator = 'Teletalk';
+
+    return { isValid: true, formatted: clean, operator };
   }
 
   /**
