@@ -1,0 +1,358 @@
+PROJECT: BUILD A REAL OFFLINE-FIRST COMMUNICATION NETWORK
+Act as a principal distributed-systems architect, native mobile networking engineer, real-time communications engineer, full-stack developer, database architect, and security engineer.
+Build a real communication platform designed specifically to help people in Bangladesh communicate when mobile data or conventional internet connectivity is unavailable, unreliable, expensive, or restricted.
+The product must support a complete web application first, followed by Android and iOS applications.
+This is not a prototype, UI demo, mockup, or simulated application.
+Implement real communication protocols, persistent storage, authentication, contact discovery, message delivery, file transfer, and audio calling.
+Do not substitute simulated functionality for real features.
+1. THE PRODUCT VISION
+Build a platform that combines:
+•	Internet-based communication.
+•	Offline-first messaging.
+•	Direct device-to-device communication.
+•	Local-network communication.
+•	Offline message queues.
+•	Automatic synchronization.
+•	Real voice messages.
+•	Real file transfer.
+•	Real-time audio calling.
+•	A persistent global contact directory.
+•	Phone-number authentication.
+•	Unique usernames.
+•	Shared identities across web, Android, and iOS.
+The defining feature is that users must be able to communicate through supported offline transports when conventional internet access is unavailable.
+The application must automatically select an available communication transport according to platform capabilities, connectivity, and recipient availability.
+Do not assume that every transport works on every device. Implement real platform-specific support and expose its actual capabilities.
+2. CORE ARCHITECTURE
+Build a transport-independent communication engine.
+Separate the application into these systems:
+A. Identity and contact system.
+B. Conversation and message system.
+C. Local persistence system.
+D. Synchronization engine.
+E. Internet communication transport.
+F. Offline peer-to-peer transport.
+G. Audio calling engine.
+H. File-transfer engine.
+I. Security and encryption layer.
+J. Cross-platform application interface.
+Define a unified message format so messages can travel through different supported transports without changing the conversation interface.
+Each message must include:
+•	A globally unique message identifier.
+•	Conversation identifier.
+•	Sender identity.
+•	Recipient or conversation destination.
+•	Message type.
+•	Creation timestamp.
+•	Payload reference.
+•	Delivery state.
+•	Transport metadata.
+•	Integrity information.
+•	Synchronization metadata.
+Implement idempotent delivery and duplicate detection across transports.
+A message delivered through an offline transport must not appear twice when it later synchronizes through the internet.
+3. OFFLINE COMMUNICATION ENGINE
+Treat offline communication as a primary product capability, not an optional feature.
+Investigate and implement suitable real transports.
+Android
+Evaluate:
+•	Bluetooth Low Energy for discovery and supported data exchange.
+•	Bluetooth Classic where appropriate and supported.
+•	Wi-Fi Direct.
+•	Local Wi-Fi communication.
+•	Nearby-device discovery and connection technologies.
+•	Wi-Fi hotspot-based connections.
+•	Suitable native peer-to-peer networking APIs.
+Choose technologies based on actual platform support, throughput, range, permissions, reliability, and device compatibility.
+Implement native Android components when browser APIs cannot provide the required functionality.
+iOS
+Evaluate:
+•	Multipeer Connectivity.
+•	Supported Bluetooth communication mechanisms.
+•	Local-network communication.
+•	Supported Wi-Fi peer-to-peer capabilities.
+•	Native networking APIs.
+Account for iOS background-execution restrictions, permissions, discovery behavior, and operating-system limitations.
+Implement a genuine iOS-specific transport where necessary.
+Web
+Implement:
+•	Offline application access.
+•	IndexedDB persistence.
+•	Queued messages.
+•	Local message composition.
+•	Local media caching.
+•	Automatic synchronization.
+•	Supported peer-to-peer connections where an actual connection can be established.
+Use WebRTC where appropriate, but distinguish direct connections from connections requiring internet-based signaling or relay infrastructure.
+Do not claim browser support for native Bluetooth, Wi-Fi Direct, or background networking unless the specific implementation is supported and tested.
+Transport selection
+Build a transport manager that can determine:
+•	Which transports are available.
+•	Which recipients are reachable.
+•	Whether a connection is direct or internet-based.
+•	Whether a message has actually been transferred.
+•	Whether an audio session can be established.
+•	Whether a file transfer has completed.
+The interface must show the real transport and delivery status.
+Do not report a successful transfer simply because a message was written to local storage.
+4. MESSAGE DELIVERY WITHOUT INTERNET
+Implement a persistent offline message-delivery system.
+When the sender and recipient are connected through a supported offline transport:
+1.	Discover or identify the recipient.
+2.	Establish an authenticated connection.
+3.	Verify the recipient identity.
+4.	Encrypt the message.
+5.	Transfer the message.
+6.	Verify its integrity.
+7.	Persist the received message.
+8.	Send an acknowledgment.
+9.	Update the sender's delivery status.
+10.	Queue synchronization for when internet connectivity returns.
+If the recipient is not reachable, retain the message locally and display its actual pending state.
+If the recipient becomes reachable through an offline transport later, retry delivery when supported.
+Implement:
+•	Durable queues.
+•	Acknowledgments.
+•	Duplicate prevention.
+•	Retry policies.
+•	Partial-transfer recovery.
+•	Message ordering.
+•	Conflict resolution.
+•	Queue expiration policies where appropriate.
+•	Clear failure reporting.
+Never silently discard pending messages.
+Support text, attachments, and voice messages through the same underlying delivery engine.
+5. OFFLINE AUDIO CALLING
+Build a real audio-calling engine capable of using suitable direct connections when both devices can establish a compatible local communication path.
+Do not tie the call interface exclusively to internet-based WebRTC.
+Create a transport-independent calling interface.
+Evaluate appropriate media transports for each platform.
+For native applications, investigate:
+•	Local-network audio sessions.
+•	Direct peer-to-peer connections.
+•	Bluetooth-supported audio communication where its actual bandwidth and latency permit the intended experience.
+•	Suitable Wi-Fi-based connections.
+•	Appropriate real-time audio codecs.
+•	Jitter buffering.
+•	Packet-loss handling.
+•	Echo cancellation.
+•	Noise suppression.
+•	Audio-device management.
+For internet calls, use WebRTC with appropriate signaling and STUN/TURN infrastructure.
+For offline calls, implement actual local discovery, session establishment, audio transport, and teardown.
+The system must distinguish:
+•	Finding a contact.
+•	Finding a reachable device.
+•	Establishing a connection.
+•	Connecting the audio session.
+•	Active conversation.
+•	Reconnection.
+•	Call failure.
+•	Call termination.
+Do not claim offline audio calling works until it has been tested between real supported devices without conventional internet connectivity.
+6. VOICE MESSAGES AND FILE SHARING
+Implement actual voice recording, playback, transfer, and persistence.
+Support:
+•	Text.
+•	Images.
+•	Documents.
+•	Audio recordings.
+•	Video files where supported.
+•	File metadata.
+•	Transfer progress.
+•	Integrity verification.
+•	Retry after interruption.
+•	Local caching.
+•	Transfer acknowledgments.
+Use chunked transfers for larger files where appropriate.
+Implement resumable transfers where the selected transport and storage architecture support them.
+When two devices are connected through a supported local transport, transfer files directly rather than unnecessarily routing their contents through the cloud.
+Use server storage when cloud synchronization is available and appropriate.
+Protect private attachments with authenticated access.
+7. GLOBAL CONTACT IDENTITY
+Create a persistent account and contact system that works across web, Android, and iOS.
+Every account must support:
+•	Verified phone number.
+•	Unique username.
+•	Display name.
+•	Profile photo.
+•	Multiple registered devices.
+•	Device identity keys.
+•	Contact relationships.
+•	Contact requests.
+•	Blocking.
+•	Account recovery.
+Users must be able to find contacts by phone number or username.
+When internet access is available, use the authoritative account directory to resolve identities and update contact information.
+When offline, use previously synchronized contact records and cryptographically verifiable device identity information.
+Do not promise that an arbitrary, previously unknown username or phone number can always be resolved without any network connection.
+Build the system so users can continue communicating with previously known contacts when internet connectivity is unavailable and a supported transport can reach those contacts.
+8. SUPABASE AND INDEXEDDB
+Use Supabase as the authoritative online synchronization backend.
+Use:
+•	Supabase Auth.
+•	PostgreSQL.
+•	Supabase Realtime.
+•	Supabase Storage.
+•	Row Level Security.
+•	SQL migrations.
+•	Secure server-side operations.
+Use IndexedDB as durable browser-side storage.
+Use appropriate native local databases for Android and iOS.
+The local database must store:
+•	Cached contacts.
+•	Cached conversations.
+•	Messages.
+•	Pending outgoing messages.
+•	Downloaded attachments.
+•	Local drafts.
+•	Synchronization checkpoints.
+•	Transfer queues.
+•	Delivery acknowledgments.
+•	Relevant device-specific state.
+Implement a shared logical data model across all clients.
+Do not treat IndexedDB as an unlimited database.
+Provide storage management, quota awareness, cache policies, and recovery behavior.
+When internet connectivity returns, reconcile local and server state without duplicate messages or lost updates.
+When a message was delivered directly to a recipient offline, synchronize the existing message and acknowledgment rather than creating a new message.
+9. SECURITY
+Implement real security from the beginning.
+Requirements:
+•	Secure account authentication.
+•	Device identity verification.
+•	Authenticated peer connections.
+•	Message integrity checks.
+•	Secure attachment transfer.
+•	Database access control.
+•	Private conversation authorization.
+•	Rate limiting where online services are involved.
+•	Secure key storage on supported native platforms.
+•	Protection against replay attacks.
+•	Protection against forged sender identities.
+•	Safe handling of untrusted peer connections.
+Evaluate an established end-to-end encryption protocol suitable for multi-device communication and offline message delivery.
+Do not invent cryptographic algorithms.
+Do not claim end-to-end encryption unless the complete protocol and key-management implementation justify that claim.
+Document the security differences between online synchronization, direct device-to-device messaging, and offline media transfer.
+10. CROSS-PLATFORM DEVELOPMENT
+Develop the web application first.
+Keep communication protocols and data models independent of the UI.
+After the web application is implemented, build native Android and iOS applications with the platform-specific networking components required for real offline communication.
+Choose an appropriate cross-platform strategy only after evaluating the native networking requirements.
+Do not assume that a shared JavaScript UI automatically provides native networking functionality.
+Prefer reusable application logic while implementing platform-specific transport adapters where necessary.
+11. USER EXPERIENCE
+Build a premium, minimal, responsive messaging interface.
+Required screens:
+•	Account creation.
+•	Phone-number OTP login.
+•	Profile setup.
+•	Username management.
+•	Contact discovery.
+•	Conversation list.
+•	Messaging interface.
+•	Voice-message recording.
+•	File transfer.
+•	Incoming calls.
+•	Active calls.
+•	Call history.
+•	Offline status.
+•	Transport selection or status.
+•	Synchronization status.
+•	Storage management.
+•	Privacy settings.
+•	Device management.
+Show accurate connection information, such as:
+•	Online.
+•	Offline.
+•	Local connection available.
+•	Internet connection available.
+•	Recipient unreachable.
+•	Message queued.
+•	Transferring.
+•	Delivered.
+•	Synchronization pending.
+Do not show fake online indicators or fabricated delivery receipts.
+Use restrained animations and optimize for low-end Android phones and unreliable connectivity.
+12. BANGLADESH-FIRST DESIGN
+Optimize for actual usage conditions in Bangladesh.
+Priorities:
+•	Low mobile-data consumption.
+•	Small application footprint.
+•	Low memory usage.
+•	Efficient battery usage.
+•	Fast startup on low-end devices.
+•	Resilience to unstable connections.
+•	Efficient text synchronization.
+•	Direct local transfer where supported.
+•	Bangla and English localization.
+•	International phone-number handling.
+•	Support for affordable Android devices.
+•	Clear offline operation.
+•	Accessible interfaces for ordinary users.
+Do not assume every user has a high-end smartphone or continuous broadband connectivity.
+Design the application to degrade gracefully when bandwidth, device performance, or network availability is limited.
+13. REAL DEVICE TESTING
+Build a genuine test plan for offline operation.
+Test with at least two independently installed devices.
+Required scenarios:
+1.	Both devices online.
+2.	Sender online and recipient offline.
+3.	Sender offline and recipient online.
+4.	Both devices offline but connected through a supported local transport.
+5.	Message delivery over a direct local connection.
+6.	File transfer over a direct local connection.
+7.	Voice-message transfer.
+8.	Audio calling over an implemented local transport.
+9.	Reconnection and synchronization.
+10.	Duplicate-delivery prevention.
+11.	Interrupted transfer recovery.
+12.	Device restart with pending messages.
+13.	Contact blocking.
+14.	Unauthorized peer attempts.
+For offline tests, disable conventional internet access and verify that the intended communication path still works.
+Record the exact devices, operating-system versions, transport, and results.
+Do not classify a simulation or unit test as a successful real-world offline communication test.
+14. DEVELOPMENT EXECUTION
+Begin by inspecting the existing repository and development environment.
+Then implement the system incrementally.
+Phase 1: Architecture and data models.
+Phase 2: Supabase backend and authentication.
+Phase 3: IndexedDB persistence and synchronization.
+Phase 4: Real online messaging.
+Phase 5: Contact discovery and identity management.
+Phase 6: Voice messages and file sharing.
+Phase 7: Internet audio calls.
+Phase 8: Offline transport abstraction.
+Phase 9: Native Android offline communication.
+Phase 10: Native iOS offline communication.
+Phase 11: Real-device testing and reliability improvements.
+Phase 12: Production deployment and documentation.
+Do not stop after producing a plan.
+Implement working code, run tests, fix errors, and continue through the available development workflow.
+If a feature requires physical hardware or external infrastructure that is unavailable, implement the available components and state exactly what still needs validation.
+Do not substitute mock functionality.
+15. FINAL ACCEPTANCE CRITERIA
+The project is not complete merely because it builds successfully.
+It must have:
+•	Real authentication.
+•	Real contact management.
+•	Real messaging.
+•	Real local persistence.
+•	Real synchronization.
+•	Real file transfers.
+•	Real voice messages.
+•	Real internet audio calls.
+•	A defined and implemented offline transport.
+•	Accurate delivery acknowledgments.
+•	Duplicate prevention.
+•	Security policies.
+•	Automated tests.
+•	A real-device offline validation plan.
+•	Documentation for web, Android, and iOS.
+Clearly distinguish implemented features from proposed or untested features.
+Build the strongest genuinely functional system supported by the available environment.
+
+**** Last main note main goal is full offline call msg file voice msg a to z no mock even when all devices offline it should work call and anything also for group call msg same thing 
+all are in the same database index db synch with superbase when offline connection all device their voice text msg call all stores in index db but as superbase synch all transfer from one to another and data transfers and call is working also remember offline audio call is the main and ultra must thing of this project.
+Start implementation now.
