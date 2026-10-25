@@ -34,6 +34,8 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
   // Step 2: OTP
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [devOtpNotification, setDevOtpNotification] = useState<string | null>(null);
+  const [isRealSms, setIsRealSms] = useState(false);
+  const [smsNotice, setSmsNotice] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(60);
   const [canResend, setCanResend] = useState(false);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -143,6 +145,8 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       const res = await AuthService.sendOtp(phoneInput);
       setFormattedPhone(res.formattedPhone);
       setDevOtpNotification(res.devOtp);
+      setIsRealSms(!!res.isRealSms);
+      setSmsNotice(res.smsNotice || null);
       setStep('otp');
       setCountdown(60);
       setCanResend(false);
@@ -420,9 +424,14 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
 
                 <input
                   type="tel"
-                  placeholder="01712 345678"
+                  placeholder="1712 345678"
                   value={phoneInput}
-                  onChange={(e) => setPhoneInput(e.target.value)}
+                  onChange={(e) => {
+                    // Strip non-digits and strip leading zero since +880 is already prefixed
+                    const digits = e.target.value.replace(/[^0-9]/g, '');
+                    setPhoneInput(digits.replace(/^0+/, ''));
+                  }}
+                  maxLength={11}
                   style={{
                     flex: 1,
                     background: 'transparent',
@@ -440,7 +449,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               </div>
 
               <div style={{ fontSize: '11px', color: '#64748b', marginTop: 5 }}>
-                Supports GP (017/013), Robi (018), Banglalink (019/014), Airtel (016), Teletalk (015).
+                Enter without leading 0. Supports GP (17/13), Robi (18), Banglalink (19/14), Airtel (16), Teletalk (15).
               </div>
             </div>
 
@@ -467,12 +476,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
             ========================================================================= */}
         {step === 'otp' && (
           <div style={{ textAlign: 'center' }}>
-            {/* Live Security Notification Banner */}
-            {devOtpNotification && (
+            {isRealSms ? (
               <div
                 style={{
-                  background: 'rgba(16, 185, 129, 0.1)',
-                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  background: 'rgba(16, 185, 129, 0.08)',
+                  border: '1px solid rgba(16, 185, 129, 0.25)',
                   borderRadius: '12px',
                   padding: '12px 14px',
                   marginBottom: 18,
@@ -480,35 +488,45 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                   color: 'var(--text-primary)',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
+                  gap: 10,
+                  textAlign: 'left',
                 }}
               >
+                <span style={{ fontSize: '20px' }}>📱</span>
                 <div>
-                  <span style={{ color: '#94a3b8' }}>Security Code: </span>
-                  <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '16px', color: 'var(--accent-light)' }}>
-                    {devOtpNotification}
+                  <div style={{ fontWeight: 600, color: 'var(--accent-light)' }}>
+                    Real SMS Sent to {formattedPhone}
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: '11.5px', marginTop: 2 }}>
+                    Please check your mobile text messages for the 6-digit verification code.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  background: 'rgba(234, 179, 8, 0.08)',
+                  border: '1px solid rgba(234, 179, 8, 0.25)',
+                  borderRadius: '12px',
+                  padding: '12px 14px',
+                  marginBottom: 18,
+                  fontSize: '12px',
+                  color: 'var(--text-primary)',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600, color: '#fde047' }}>
+                    Supabase SMS Gateway Notice
+                  </span>
+                  <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                    Code: <strong style={{ color: 'var(--accent-light)', fontFamily: 'monospace', fontSize: '13px' }}>{devOtpNotification}</strong>
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOtpDigits(devOtpNotification.split(''));
-                    triggerVerifyOtp(devOtpNotification);
-                  }}
-                  style={{
-                    padding: '5px 12px',
-                    borderRadius: '6px',
-                    background: 'var(--accent-main)',
-                    color: '#05080d',
-                    fontSize: '11.5px',
-                    fontWeight: 700,
-                    border: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Auto-Fill OTP
-                </button>
+                <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.4 }}>
+                  {smsNotice ? `${smsNotice}. ` : ''}
+                  To dispatch telecom SMS to physical phones, activate Twilio in <em>Supabase Dashboard → Authentication → Providers → Phone</em>.
+                </div>
               </div>
             )}
 

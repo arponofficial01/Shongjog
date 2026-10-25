@@ -24,6 +24,8 @@ export class AuthService {
     formattedPhone: string;
     operator: string;
     devOtp: string;
+    isRealSms?: boolean;
+    smsNotice?: string | null;
   }> {
     if (!navigator.onLine) {
       throw new Error('Internet connection required for real-time OTP verification.');
@@ -37,21 +39,31 @@ export class AuthService {
     const formatted = val.formatted;
     const operator = val.operator || 'Bangladesh Mobile Network';
 
-    // Generate cryptographically random 6-digit OTP
+    // Cryptographically random 6-digit fallback OTP
     const array = new Uint32Array(1);
     crypto.getRandomValues(array);
     const otpCode = (100000 + (array[0] % 900000)).toString();
 
-    // Try Supabase Auth native OTP if configured
+    // Call Supabase Auth native SMS OTP
     const { isConfigured } = getSupabaseConfig();
+    let supabaseSmsSent = false;
+    let smsNotice: string | null = null;
+
     if (isConfigured) {
       try {
         const supabase = getSupabase();
-        await supabase.auth.signInWithOtp({
+        const { error } = await supabase.auth.signInWithOtp({
           phone: formatted,
         });
+        if (error) {
+          smsNotice = error.message;
+          console.info('Supabase Phone Auth Notice:', error.message);
+        } else {
+          supabaseSmsSent = true;
+        }
       } catch (err: any) {
-        console.info('Supabase SMS gateway notice (using secure live realtime OTP):', err?.message);
+        smsNotice = err?.message || 'Supabase SMS provider unreachable';
+        console.info('Supabase SMS Gateway Error:', err?.message);
       }
     }
 
@@ -71,6 +83,8 @@ export class AuthService {
       formattedPhone: formatted,
       operator,
       devOtp: otpCode,
+      isRealSms: supabaseSmsSent,
+      smsNotice,
     };
   }
 

@@ -19,7 +19,9 @@ export class IdentityService {
     let clean = phone.replace(/[\s\-()]/g, '');
     if (clean.startsWith('00880')) clean = '+' + clean.substring(2);
     if (clean.startsWith('880')) clean = '+' + clean;
+    if (clean.startsWith('+8800')) clean = '+880' + clean.substring(5); // strip accidental 0 after +880
     if (clean.startsWith('01')) clean = '+880' + clean.substring(1);
+    if (/^1[3-9]\d{8}$/.test(clean)) clean = '+880' + clean;
 
     const bdRegex = /^\+880(1[3-9]\d{8})$/;
     const match = clean.match(bdRegex);
@@ -27,7 +29,7 @@ export class IdentityService {
       return {
         isValid: false,
         formatted: clean,
-        error: 'Invalid Bangladeshi mobile number. Must be an 11-digit number from GP (017/013), Robi (018), Banglalink (019/014), Airtel (016), or Teletalk (015).',
+        error: 'Invalid Bangladeshi mobile number. Enter a 10-digit number (e.g. 1712345678) from GP (17/13), Robi (18), Banglalink (19/14), Airtel (16), or Teletalk (15).',
       };
     }
 
