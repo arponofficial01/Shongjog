@@ -1356,6 +1356,150 @@ input::placeholder, textarea::placeholder {
   box-shadow: 0 6px 26px var(--accent-glow);
 }
 
+/* Settings Segmented Cards & Sections */
+.settings-section-block {
+  margin-bottom: 22px;
+}
+
+.settings-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-light);
+  margin-bottom: 8px;
+  padding-left: 4px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.settings-card-frame {
+  background: rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+}
+
+.settings-row-tile {
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-glass);
+  transition: background 0.15s ease;
+}
+
+.settings-row-tile:last-child {
+  border-bottom: none;
+}
+
+/* Chat Card Hover Delete Action */
+.chat-card-delete-hover {
+  opacity: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  color: var(--rose-danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.chat-card-lux:hover .chat-card-delete-hover {
+  opacity: 1;
+}
+
+.chat-card-delete-hover:hover {
+  background: var(--rose-danger);
+  color: white;
+  transform: scale(1.1);
+  box-shadow: 0 2px 10px var(--rose-glow);
+}
+
+/* Message Bubble Three-Line Context Dropdown */
+.bubble-context-trigger {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bubble-context-trigger:hover {
+  color: var(--text-pure);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.bubble-context-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 175px;
+  background: rgba(14, 21, 37, 0.98);
+  backdrop-filter: blur(28px);
+  border: 1px solid var(--border-glass-bright);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.65);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: context-pop 0.16s var(--ease-spring);
+}
+
+.bubble-row.incoming .bubble-context-menu {
+  left: 0;
+  right: auto;
+}
+
+@keyframes context-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.context-menu-item {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: none;
+  border: none;
+  text-align: left;
+}
+
+.context-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-pure);
+}
+
+.context-menu-item.danger {
+  color: var(--rose-danger);
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fb7185;
+}
+
 /* Mobile Responsive */
 @media (max-width: 768px) {
   .shongjog-sidebar {
@@ -1372,3 +1516,4 @@ input::placeholder, textarea::placeholder {
     display: flex;
   }
 }
+

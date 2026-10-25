@@ -18,6 +18,7 @@ import {
   Trash2,
   X,
   Info,
+  MoreVertical,
 } from 'lucide-react';
 
 import { getDatabase } from './services/db/database';
@@ -95,6 +96,9 @@ export const App: React.FC = () => {
   // Audio Call
   const [activeCallSession, setActiveCallSession] = useState<ActiveCallSession | null>(null);
 
+  // Message Three-Dot/Three-Line Options Menu
+  const [activeMenuMsgId, setActiveMenuMsgId] = useState<string | null>(null);
+
   // Refs
   const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -105,6 +109,13 @@ export const App: React.FC = () => {
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  // Click outside closes active message menu
+  useEffect(() => {
+    const handleCloseMenu = () => setActiveMenuMsgId(null);
+    window.addEventListener('click', handleCloseMenu);
+    return () => window.removeEventListener('click', handleCloseMenu);
+  }, []);
 
   // 1. App Startup, Auto-Detect Network, & Realtime Subscriptions
   useEffect(() => {
@@ -193,6 +204,16 @@ export const App: React.FC = () => {
       TransportManager.onClearHistory = (conversationId) => {
         if (activeConversationIdRef.current === conversationId) {
           setMessages([]);
+        }
+      };
+
+      // 5. Real-time Delete Entire Conversation
+      TransportManager.onDeleteConversation = (conversationId) => {
+        setConversations((prev) => prev.filter((c) => c.id !== conversationId));
+        if (activeConversationIdRef.current === conversationId) {
+          setActiveConversationId(null);
+          setMessages([]);
+          setShowPeerDetails(false);
         }
       };
 
@@ -541,6 +562,31 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleDeleteConversation = async (convId: string) => {
+    if (!confirm('Are you sure you want to permanently delete this entire chat and all its messages?')) return;
+    try {
+      const db = await getDatabase();
+      await db.delete('conversations', convId);
+      const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', convId);
+      for (const m of allMsgs) {
+        await db.delete('messages', m.id);
+      }
+      setConversations((prev) => prev.filter((c) => c.id !== convId));
+      if (activeConversationId === convId) {
+        setActiveConversationId(null);
+        setMessages([]);
+        setShowPeerDetails(false);
+      }
+      // Broadcast deletion across all connected tabs and peers in real-time
+      TransportManager.broadcastEvent({
+        type: 'delete_conversation',
+        conversationId: convId,
+      });
+    } catch (err) {
+      console.error('Failed to delete conversation', err);
+    }
+  };
+
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const activePeerId = activeConversation?.participantIds.find((id) => id !== profile?.id);
   const activeContact = contacts.find((c) => c.id === activePeerId);
@@ -754,9 +800,22 @@ export const App: React.FC = () => {
                         {conv.lastMessageSnippet}
                       </span>
 
-                      {conv.unreadCount > 0 && (
-                        <span className="chat-unread-pill">{conv.unreadCount}</span>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        {conv.unreadCount > 0 && (
+                          <span className="chat-unread-pill">{conv.unreadCount}</span>
+                        )}
+                        <button
+                          type="button"
+                          className="chat-card-delete-hover"
+                          title="Delete Entire Chat"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteConversation(conv.id);
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -843,6 +902,17 @@ export const App: React.FC = () => {
                   title="Chat Details & Clear History"
                 >
                   <Info size={18} />
+                </button>
+
+                {/* Delete Full Chat */}
+                <button
+                  type="button"
+                  className="icon-button-lux"
+                  onClick={() => activeConversationId && handleDeleteConversation(activeConversationId)}
+                  title="Delete Entire Chat"
+                  style={{ color: 'var(--rose-danger)' }}
+                >
+                  <Trash2 size={18} />
                 </button>
               </div>
             </div>
@@ -967,6 +1037,75 @@ export const App: React.FC = () => {
                             )}
                           </span>
                         )}
+
+                        {/* Three-Line / Three-Dot Menu Options */}
+                        <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            className="bubble-context-trigger"
+                            title="Message Options"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuMsgId((prev) => (prev === msg.id ? null : msg.id));
+                            }}
+                          >
+                            <MoreVertical size={13} />
+                          </button>
+
+                          {activeMenuMsgId === msg.id && (
+                            <div
+                              className="bubble-context-menu"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  gap: 4,
+                                  padding: '4px 6px 6px',
+                                  borderBottom: '1px solid var(--border-glass)',
+                                  justifyContent: 'space-between',
+                                }}
+                              >
+                                {['❤️', '👍', '😂', '🔥', '😮', '🙏'].map((emoji) => (
+                                  <span
+                                    key={emoji}
+                                    style={{ cursor: 'pointer', fontSize: '15px' }}
+                                    onClick={() => {
+                                      handleReactToMessage(msg.id, emoji);
+                                      setActiveMenuMsgId(null);
+                                    }}
+                                  >
+                                    {emoji}
+                                  </span>
+                                ))}
+                              </div>
+
+                              <button
+                                type="button"
+                                className="context-menu-item"
+                                onClick={() => {
+                                  handleCopyMessage(msg.content);
+                                  setActiveMenuMsgId(null);
+                                }}
+                              >
+                                <Copy size={13} />
+                                <span>Copy Text</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="context-menu-item danger"
+                                onClick={() => {
+                                  handleDeleteMessage(msg.id);
+                                  setActiveMenuMsgId(null);
+                                }}
+                              >
+                                <Trash2 size={13} />
+                                <span>Delete Message</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1107,6 +1246,15 @@ export const App: React.FC = () => {
                     >
                       <Trash2 size={16} />
                       <span>Clear Chat History</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="peer-action-card-btn danger"
+                      onClick={() => activeConversationId && handleDeleteConversation(activeConversationId)}
+                    >
+                      <Trash2 size={16} />
+                      <span>Delete Entire Conversation</span>
                     </button>
                   </div>
                 </div>

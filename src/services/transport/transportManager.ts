@@ -27,6 +27,7 @@ export class TransportManager {
   public static onReactionUpdate?: (msgId: string, reactions: { [emoji: string]: number }) => void;
   public static onDeleteMessage?: (msgId: string) => void;
   public static onClearHistory?: (conversationId: string) => void;
+  public static onDeleteConversation?: (conversationId: string) => void;
 
   public static init() {
     window.addEventListener('online', () => this.notifyStatusChange());
@@ -80,6 +81,21 @@ export class TransportManager {
           return;
         }
 
+        // Check if event is delete conversation
+        if (data.type === 'delete_conversation') {
+          console.log('BroadcastChannel delete conversation:', data);
+          const db = await getDatabase();
+          await db.delete('conversations', data.conversationId);
+          const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
+          for (const m of allMsgs) {
+            await db.delete('messages', m.id);
+          }
+          if (this.onDeleteConversation) {
+            this.onDeleteConversation(data.conversationId);
+          }
+          return;
+        }
+
         // Standard chat message
         const msg: Message = data.message || data;
         if (msg && msg.id && msg.conversationId) {
@@ -119,6 +135,12 @@ export class TransportManager {
     SupabaseRealtimeService.onClearHistoryReceived = (conversationId) => {
       if (this.onClearHistory) {
         this.onClearHistory(conversationId);
+      }
+    };
+
+    SupabaseRealtimeService.onDeleteConversationReceived = (conversationId) => {
+      if (this.onDeleteConversation) {
+        this.onDeleteConversation(conversationId);
       }
     };
 

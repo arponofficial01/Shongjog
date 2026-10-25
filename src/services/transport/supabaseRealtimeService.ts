@@ -20,6 +20,7 @@ export class SupabaseRealtimeService {
   public static onReactionReceived?: (msgId: string, reactions: { [emoji: string]: number }) => void;
   public static onDeleteReceived?: (msgId: string) => void;
   public static onClearHistoryReceived?: (conversationId: string) => void;
+  public static onDeleteConversationReceived?: (conversationId: string) => void;
 
   public static getInstance(): SupabaseRealtimeService {
     if (!this.instance) {
@@ -155,6 +156,16 @@ export class SupabaseRealtimeService {
         }
         if (SupabaseRealtimeService.onClearHistoryReceived) {
           SupabaseRealtimeService.onClearHistoryReceived(data.conversationId);
+        }
+      } else if (data.type === 'delete_conversation') {
+        const db = await getDatabase();
+        await db.delete('conversations', data.conversationId);
+        const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
+        for (const m of allMsgs) {
+          await db.delete('messages', m.id);
+        }
+        if (SupabaseRealtimeService.onDeleteConversationReceived) {
+          SupabaseRealtimeService.onDeleteConversationReceived(data.conversationId);
         }
       }
     });
