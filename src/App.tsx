@@ -14,7 +14,6 @@ import {
   ShieldCheck,
   FileText,
   Radio,
-  Zap,
 } from 'lucide-react';
 
 import { getDatabase } from './services/db/database';
@@ -42,6 +41,7 @@ export const App: React.FC = () => {
   // --- Profile & Navigation State ---
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [, setLangTick] = useState(0);
 
   // Collections
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -115,7 +115,7 @@ export const App: React.FC = () => {
         {
           id: 'demo_3',
           phoneNumber: '+880 1911 223344',
-          displayName: 'Dhaka Direct Mesh',
+          displayName: 'Dhaka Mesh Node',
           username: 'dhaka_mesh',
           isBlocked: false,
           lastSeen: Date.now() - 1000 * 60 * 60,
@@ -135,7 +135,7 @@ export const App: React.FC = () => {
           id: 'conv_1',
           type: 'direct',
           participantIds: [_userId || '', storedContacts[0].id],
-          lastMessageSnippet: 'Assalamu Alaikum! Ready for the offline call test?',
+          lastMessageSnippet: 'Assalamu Alaikum! Ready for the direct mesh call test?',
           lastMessageTimestamp: Date.now() - 1000 * 60 * 3,
           unreadCount: 1,
           updatedAt: Date.now() - 1000 * 60 * 3,
@@ -175,7 +175,7 @@ export const App: React.FC = () => {
           senderDeviceId: 'peer_dev',
           recipientId: profile?.id,
           type: 'text',
-          content: 'Assalamu Alaikum! Ready for the direct communication test?',
+          content: 'Assalamu Alaikum! Welcome to Shongjog (সংযোগ). Send a voice note or start a direct call!',
           timestamp: Date.now() - 1000 * 60 * 8,
           status: 'read',
           transport: 'internet_supabase',
@@ -348,15 +348,15 @@ export const App: React.FC = () => {
 
   if (isInitializing) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#06090e', color: '#10b981' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#05080d', color: '#10b981' }}>
         <Radio className="animate-spin" size={32} />
       </div>
     );
   }
 
   return (
-    <div className={`contact-app-root ${activeConversationId ? 'mobile-chat-open' : ''}`}>
-      {/* Onboarding Identity Modal */}
+    <div className={`shongjog-app-root ${activeConversationId ? 'mobile-chat-open' : ''}`}>
+      {/* Onboarding Identity Modal with @username */}
       {!profile && (
         <ProfileSetupModal
           onProfileCreated={(newProfile) => {
@@ -366,20 +366,21 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Voice Call Overlay */}
+      {/* Acoustic Soundwave Voice Call Overlay */}
       {activeCallSession && profile && (
         <AudioCallModal session={activeCallSession} localUserId={profile.id} />
       )}
 
       {/* ==========================================================================
-          LEFT SIDEBAR: Brand Header, Search, Filter Chips, Chat List
+          LEFT SIDEBAR: Shongjog Brand Header, Search, Filter Tabs, Chat Stream
           ========================================================================== */}
-      <aside className="contact-sidebar">
+      <aside className="shongjog-sidebar">
         {/* Settings Drawer */}
         {showSettingsDrawer && profile && (
           <SettingsPanel
             profile={profile}
             onBack={() => setShowSettingsDrawer(false)}
+            onLanguageChange={() => setLangTick((t) => t + 1)}
             onProfileReset={() => {
               IdentityService.logout();
               setProfile(null);
@@ -387,7 +388,7 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* New Contact Drawer */}
+        {/* New Contact Drawer with @username */}
         {showNewContactDrawer && (
           <ContactModal
             onClose={() => setShowNewContactDrawer(false)}
@@ -409,29 +410,29 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Brand Header */}
-        <div className="sidebar-header">
+        {/* Shongjog (সংযোগ) Brand Header */}
+        <div className="shongjog-sidebar-header">
           <div
-            className="brand-badge"
+            className="brand-section-box"
             onClick={() => setShowSettingsDrawer(true)}
             title="Profile & Settings"
           >
-            <div className="brand-icon-orb">
-              <Zap size={20} />
+            <div className="brand-logo-orb">
+              <Radio size={22} />
             </div>
-            <div className="brand-title-group">
-              <h1>
-                Contact
-                <span className="brand-dot" />
-              </h1>
-              <span className="brand-sub">MESH NETWORK</span>
+            <div className="brand-meta-column">
+              <div className="brand-main-title">
+                Shongjog
+                <span className="brand-bengali-script">সংযোগ</span>
+              </div>
+              <span className="brand-tagline-text">DIRECT MESH</span>
             </div>
           </div>
 
-          <div className="header-actions">
+          <div className="header-tools-cluster">
             <button
               type="button"
-              className="circle-action-btn new-chat"
+              className="icon-button-lux new-chat-btn"
               onClick={() => setShowNewContactDrawer(true)}
               title="New Chat"
             >
@@ -439,7 +440,7 @@ export const App: React.FC = () => {
             </button>
             <button
               type="button"
-              className="circle-action-btn"
+              className="icon-button-lux"
               onClick={() => setShowSettingsDrawer(true)}
               title="Settings"
             >
@@ -449,48 +450,57 @@ export const App: React.FC = () => {
         </div>
 
         {/* Search Bar */}
-        <div className="sidebar-search-box">
-          <div className="search-input-wrapper">
+        <div className="sidebar-search-area">
+          <div className="lux-search-shell">
             <Search size={16} color="#94a3b8" />
             <input
               type="text"
-              placeholder="Search conversations or contacts..."
+              placeholder="Search conversations or @username..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
         </div>
 
-        {/* Filter Pills */}
-        <div className="filter-pills-row">
+        {/* Filter Tabs */}
+        <div className="filter-tabs-row">
           <button
             type="button"
-            className={`filter-pill ${activeFilter === 'all' ? 'active' : ''}`}
+            className={`filter-tab-chip ${activeFilter === 'all' ? 'active' : ''}`}
             onClick={() => setActiveFilter('all')}
           >
             All
           </button>
           <button
             type="button"
-            className={`filter-pill ${activeFilter === 'unread' ? 'active' : ''}`}
+            className={`filter-tab-chip ${activeFilter === 'unread' ? 'active' : ''}`}
             onClick={() => setActiveFilter('unread')}
           >
             Unread
           </button>
           <button
             type="button"
-            className={`filter-pill ${activeFilter === 'direct' ? 'active' : ''}`}
+            className={`filter-tab-chip ${activeFilter === 'direct' ? 'active' : ''}`}
             onClick={() => setActiveFilter('direct')}
           >
-            Direct LAN
+            Direct Mesh
           </button>
         </div>
 
-        {/* Chats Scroll Area */}
-        <div className="sidebar-chats-scroll">
+        {/* Chat Stream List */}
+        <div className="sidebar-chat-stream">
           {conversations
             .filter((c) => {
-              if (activeFilter === 'unread') return c.unreadCount > 0;
+              if (activeFilter === 'unread' && c.unreadCount === 0) return false;
+              if (searchQuery.trim()) {
+                const q = searchQuery.toLowerCase();
+                const peerId = c.participantIds.find((id) => id !== profile?.id);
+                const contact = contacts.find((ct) => ct.id === peerId);
+                const name = (contact?.displayName || c.name || '').toLowerCase();
+                const u = (contact?.username || '').toLowerCase();
+                const snippet = (c.lastMessageSnippet || '').toLowerCase();
+                return name.includes(q) || u.includes(q) || snippet.includes(q);
+              }
               return true;
             })
             .map((conv) => {
@@ -502,20 +512,25 @@ export const App: React.FC = () => {
               return (
                 <div
                   key={conv.id}
-                  className={`chat-card ${isSelected ? 'active' : ''}`}
+                  className={`chat-card-lux ${isSelected ? 'active' : ''}`}
                   onClick={() => {
                     setActiveConversationId(conv.id);
                     loadMessages(conv.id);
                   }}
                 >
-                  <div className="chat-card-avatar online">
+                  <div className="chat-avatar-squircle online">
                     {name.charAt(0).toUpperCase()}
                   </div>
 
-                  <div className="chat-card-details">
-                    <div className="chat-card-top">
-                      <span className="chat-card-name">{name}</span>
-                      <span className="chat-card-time">
+                  <div className="chat-card-body">
+                    <div className="chat-card-row-top">
+                      <span className="chat-card-title">
+                        {name}
+                        {contact?.username && (
+                          <span className="chat-card-username">@{contact.username}</span>
+                        )}
+                      </span>
+                      <span className="chat-card-timestamp">
                         {new Date(conv.lastMessageTimestamp).toLocaleTimeString([], {
                           hour: '2-digit',
                           minute: '2-digit',
@@ -523,14 +538,14 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <div className="chat-card-bottom">
-                      <span className="chat-card-preview">
-                        <CheckCheck size={15} color="#34d399" style={{ flexShrink: 0 }} />
+                    <div className="chat-card-row-bottom">
+                      <span className="chat-card-snippet-text">
+                        <CheckCheck size={14} color="#34d399" style={{ flexShrink: 0 }} />
                         {conv.lastMessageSnippet}
                       </span>
 
                       {conv.unreadCount > 0 && (
-                        <span className="chat-badge-count">{conv.unreadCount}</span>
+                        <span className="chat-unread-pill">{conv.unreadCount}</span>
                       )}
                     </div>
                   </div>
@@ -541,14 +556,14 @@ export const App: React.FC = () => {
       </aside>
 
       {/* ==========================================================================
-          RIGHT MAIN PANEL: Active Conversation or Executive Welcome Screen
+          RIGHT MAIN PANEL: Active Conversation or Shongjog Welcome Viewport
           ========================================================================== */}
-      <main className="contact-main">
+      <main className="shongjog-main-viewport">
         {activeConversationId ? (
           <>
-            {/* Header */}
-            <div className="main-chat-header">
-              <div className="chat-peer-info">
+            {/* Active Conversation Topbar */}
+            <div className="main-chat-topbar">
+              <div className="peer-profile-cluster">
                 <button
                   type="button"
                   onClick={() => setActiveConversationId(null)}
@@ -558,34 +573,39 @@ export const App: React.FC = () => {
                   <ArrowLeft size={20} />
                 </button>
 
-                <div className="chat-peer-avatar">
+                <div className="peer-avatar-squircle">
                   {activeChatName.charAt(0).toUpperCase()}
                 </div>
 
                 <div>
-                  <div className="chat-peer-name">{activeChatName}</div>
-                  <div className="chat-peer-status">
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#10b981' }} />
+                  <div className="peer-title-text">
+                    {activeChatName}
+                    {activeContact?.username && (
+                      <span className="peer-handle-badge">@{activeContact.username}</span>
+                    )}
+                  </div>
+                  <div className="peer-connectivity-status">
+                    <span className="pulse-beacon-dot" />
                     Direct Mesh Active
                   </div>
                 </div>
               </div>
 
-              <div className="chat-header-tools">
+              <div className="chat-topbar-tools">
                 <button
                   type="button"
-                  className="tool-action-btn call-active"
+                  className="topbar-call-button"
                   onClick={handleStartCall}
                   title="Direct Voice Call"
                 >
-                  <Phone size={18} />
+                  <Phone size={19} />
                 </button>
               </div>
             </div>
 
-            {/* Messages Flow Area */}
-            <div className="messages-flow">
-              <div className="security-ribbon">
+            {/* Messages Scroll Area */}
+            <div className="messages-stream-container">
+              <div className="encryption-security-ribbon">
                 <ShieldCheck size={14} color="#10b981" />
                 End-to-End Encrypted Direct Connection
               </div>
@@ -596,9 +616,9 @@ export const App: React.FC = () => {
                 return (
                   <div
                     key={msg.id}
-                    className={`msg-row ${isOutgoing ? 'outgoing' : 'incoming'}`}
+                    className={`bubble-row ${isOutgoing ? 'outgoing' : 'incoming'}`}
                   >
-                    <div className={`msg-bubble ${isOutgoing ? 'outgoing' : 'incoming'}`}>
+                    <div className={`chat-bubble-shell ${isOutgoing ? 'outgoing' : 'incoming'}`}>
                       {msg.type === 'text' && <div>{msg.content}</div>}
 
                       {msg.type === 'voice' && (
@@ -612,8 +632,8 @@ export const App: React.FC = () => {
                       )}
 
                       {msg.type === 'file' && (
-                        <div className="lux-file-card">
-                          <div className="lux-file-icon">
+                        <div className="file-attachment-card">
+                          <div className="file-icon-box">
                             <FileText size={20} />
                           </div>
                           <div>
@@ -629,7 +649,7 @@ export const App: React.FC = () => {
                         </div>
                       )}
 
-                      <div className="msg-meta">
+                      <div className="bubble-meta-info">
                         <span>
                           {new Date(msg.timestamp).toLocaleTimeString([], {
                             hour: '2-digit',
@@ -639,13 +659,13 @@ export const App: React.FC = () => {
                         {isOutgoing && (
                           <span>
                             {msg.status === 'read' ? (
-                              <CheckCheck size={15} color="#34d399" />
+                              <CheckCheck size={14} color="#34d399" />
                             ) : msg.status === 'delivered' ? (
-                              <CheckCheck size={15} color="#94a3b8" />
+                              <CheckCheck size={14} color="#94a3b8" />
                             ) : msg.status === 'sending' ? (
                               <Clock size={12} color="#94a3b8" />
                             ) : (
-                              <Check size={15} color="#94a3b8" />
+                              <Check size={14} color="#94a3b8" />
                             )}
                           </span>
                         )}
@@ -657,8 +677,8 @@ export const App: React.FC = () => {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Input Bar */}
-            <form className="main-chat-input-area" onSubmit={handleSendMessage}>
+            {/* Bottom Input Bar */}
+            <form className="chat-bottom-input-bar" onSubmit={handleSendMessage}>
               <input
                 type="file"
                 ref={fileInputRef}
@@ -668,7 +688,7 @@ export const App: React.FC = () => {
 
               <button
                 type="button"
-                className="tool-action-btn"
+                className="icon-button-lux"
                 title="Attach Document"
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -677,7 +697,7 @@ export const App: React.FC = () => {
 
               <input
                 type="text"
-                className="chat-input-pill"
+                className="message-type-input"
                 placeholder={isRecordingVoice ? `Recording voice (${recordingSeconds}s)...` : 'Type a message...'}
                 value={inputText}
                 disabled={isRecordingVoice}
@@ -685,13 +705,13 @@ export const App: React.FC = () => {
               />
 
               {inputText.trim() ? (
-                <button type="submit" className="lux-send-btn" title="Send message">
+                <button type="submit" className="send-message-action" title="Send message">
                   <Send size={19} />
                 </button>
               ) : (
                 <button
                   type="button"
-                  className={`lux-mic-btn ${isRecordingVoice ? 'recording' : ''}`}
+                  className={`record-mic-action ${isRecordingVoice ? 'recording' : ''}`}
                   onClick={handleToggleVoiceRecord}
                   title={isRecordingVoice ? 'Stop and send' : 'Record voice note'}
                 >
@@ -702,21 +722,23 @@ export const App: React.FC = () => {
           </>
         ) : (
           /* ==========================================================================
-             EXECUTIVE WELCOME SCREEN (When no chat is selected)
+             EXECUTIVE SHONGJOG WELCOME VIEWPORT (When no chat is active)
              ========================================================================== */
-          <div className="contact-welcome-viewport">
-            <div className="welcome-crystal-badge">
-              <Radio size={42} color="#10b981" />
+          <div className="shongjog-welcome-view">
+            <div className="welcome-floating-badge">
+              <Radio size={44} color="#10b981" />
             </div>
 
-            <h1 className="welcome-heading">Contact Network</h1>
-            <p className="welcome-sub">
-              Next-generation direct communication network. Send messages, voice notes, and make real-time audio calls directly across devices.
+            <h1 className="welcome-title-primary">
+              Shongjog <span style={{ fontFamily: 'var(--font-bangla)', color: 'var(--emerald-light)', fontSize: '26px' }}>সংযোগ</span>
+            </h1>
+            <p className="welcome-desc-paragraph">
+              Next-generation direct communication network with unique @usernames. Send messages, voice notes, and make real-time audio calls directly across devices with hardware-grade cryptographic privacy.
             </p>
 
-            <div className="welcome-encrypted-pill">
+            <div className="welcome-security-capsule">
               <ShieldCheck size={16} />
-              End-to-End Encrypted • Private Hardware Keys
+              End-to-End Encrypted • Hardware Cryptographic Keys
             </div>
           </div>
         )}

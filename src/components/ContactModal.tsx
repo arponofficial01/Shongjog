@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, UserPlus } from 'lucide-react';
+import { ArrowLeft, UserPlus, AtSign, Phone, User } from 'lucide-react';
 import { IdentityService } from '../services/identity/identityService';
 import type { Contact } from '../services/db/database';
 
@@ -11,6 +11,7 @@ interface ContactModalProps {
 export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSaved }) => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   const [error, setError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -18,8 +19,8 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
     e.preventDefault();
     setError('');
 
-    if (!phoneNumber.trim()) {
-      setError('Please enter a phone number');
+    if (!phoneNumber.trim() && !username.trim()) {
+      setError('Please provide either a phone number or @username');
       return;
     }
 
@@ -28,11 +29,16 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
       return;
     }
 
+    // Default placeholder phone if user only provided username
+    const finalPhone = phoneNumber.trim() || '+8801700000000';
+    const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+
     setIsSaving(true);
     try {
       const contact = await IdentityService.addContact(
-        phoneNumber,
-        displayName.trim()
+        finalPhone,
+        displayName.trim(),
+        cleanUsername || undefined
       );
       onContactSaved(contact);
       onClose();
@@ -44,15 +50,15 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
   };
 
   return (
-    <div className="contact-drawer">
-      <div className="drawer-top-bar">
+    <div className="luxury-drawer-shell">
+      <div className="drawer-gradient-bar">
         <button type="button" onClick={onClose} style={{ color: 'white' }}>
           <ArrowLeft size={22} />
         </button>
         <h2>New Contact</h2>
       </div>
 
-      <div className="drawer-scroll-body">
+      <div className="drawer-scroll-container">
         {error && (
           <div
             style={{
@@ -70,38 +76,63 @@ export const ContactModal: React.FC<ContactModalProps> = ({ onClose, onContactSa
         )}
 
         <form onSubmit={handleSubmit}>
-          <div className="lux-form-field">
-            <label>MOBILE NUMBER</label>
-            <input
-              type="tel"
-              className="lux-text-input"
-              placeholder="+880 1712 345678"
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              required
-            />
+          <div className="form-group-field">
+            <label>FULL NAME</label>
+            <div className="input-prefix-wrapper">
+              <span className="input-prefix-symbol">
+                <User size={16} />
+              </span>
+              <input
+                type="text"
+                className="lux-form-input has-prefix"
+                placeholder="e.g. Rafiqul Islam"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+              />
+            </div>
           </div>
 
-          <div className="lux-form-field">
-            <label>FULL NAME</label>
-            <input
-              type="text"
-              className="lux-text-input"
-              placeholder="e.g. Rafiqul Islam"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              required
-            />
+          <div className="form-group-field">
+            <label>USERNAME (@HANDLE)</label>
+            <div className="input-prefix-wrapper">
+              <span className="input-prefix-symbol">
+                <AtSign size={16} />
+              </span>
+              <input
+                type="text"
+                className="lux-form-input has-prefix"
+                placeholder="rafiq_bd"
+                value={username}
+                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+              />
+            </div>
+          </div>
+
+          <div className="form-group-field">
+            <label>PHONE NUMBER (OPTIONAL IF USERNAME PROVIDED)</label>
+            <div className="input-prefix-wrapper">
+              <span className="input-prefix-symbol">
+                <Phone size={16} />
+              </span>
+              <input
+                type="tel"
+                className="lux-form-input has-prefix"
+                placeholder="+880 1712 345678"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+              />
+            </div>
           </div>
 
           <button
             type="submit"
             disabled={isSaving}
-            className="lux-primary-btn"
+            className="primary-action-btn-lux"
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14 }}
           >
             <UserPlus size={18} />
-            <span>{isSaving ? 'Saving...' : 'Add Contact & Message'}</span>
+            <span>{isSaving ? 'Adding...' : 'Add Contact & Start Chat'}</span>
           </button>
         </form>
       </div>
