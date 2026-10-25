@@ -1,11 +1,19 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL_KEY = 'contact_app_supabase_url';
 const SUPABASE_KEY_KEY = 'contact_app_supabase_anon_key';
 
-// Default public sandbox or user configured credentials
-const DEFAULT_URL = import.meta.env.VITE_SUPABASE_URL || 'https://xyzcompany.supabase.co';
-const DEFAULT_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'public-anon-key-placeholder';
+// User configured live credentials
+const DEFAULT_URL =
+  import.meta.env.VITE_SUPABASE_URL ||
+  (import.meta.env as any).NEXT_PUBLIC_SUPABASE_URL ||
+  'https://ndzuimzgxfvqmmwtbrnh.supabase.co';
+
+const DEFAULT_ANON_KEY =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  (import.meta.env as any).NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  'sb_publishable_HXje7q3K-cXbCwfLHp3P-Q_hm6ZEv4d';
 
 let supabaseInstance: SupabaseClient | null = null;
 
@@ -18,7 +26,6 @@ export function getSupabaseConfig(): { url: string; anonKey: string; isConfigure
   const isConfigured = Boolean(
     url &&
     !url.includes('placeholder') &&
-    !url.includes('xyzcompany') &&
     anonKey &&
     !anonKey.includes('placeholder')
   );

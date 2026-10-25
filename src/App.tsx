@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   FileText,
   Radio,
+  WifiOff,
 } from 'lucide-react';
 
 import { getDatabase } from './services/db/database';
@@ -26,6 +27,7 @@ import type {
 import { IdentityService } from './services/identity/identityService';
 import { TransportManager } from './services/transport/transportManager';
 import { WebRTCService } from './services/transport/webrtcService';
+import { SupabaseRealtimeService } from './services/transport/supabaseRealtimeService';
 import { CallManager } from './services/call/callManager';
 import type { ActiveCallSession } from './services/call/callManager';
 import { VoiceRecorder } from './services/media/voiceRecorder';
@@ -36,6 +38,7 @@ import { AudioCallModal } from './components/AudioCallModal';
 import { ContactModal } from './components/ContactModal';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ProfileSetupModal } from './components/ProfileSetupModal';
+import { OfflinePairingModal } from './components/OfflinePairingModal';
 
 export const App: React.FC = () => {
   // --- Profile & Navigation State ---
@@ -49,9 +52,10 @@ export const App: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
 
-  // Drawers
+  // Drawers & Modals
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [showNewContactDrawer, setShowNewContactDrawer] = useState(false);
+  const [showPairingModal, setShowPairingModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'direct'>('all');
 
@@ -67,21 +71,73 @@ export const App: React.FC = () => {
   const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
 
-  // 1. App Startup
+  // Sync ref with state
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
+  // 1. App Startup & Realtime Subscriptions
   useEffect(() => {
     async function initApp() {
       TransportManager.init();
 
+      // Listen for incoming audio calls
       const callMgr = CallManager.getInstance();
       callMgr.onSessionChange = (session) => {
         setActiveCallSession(session);
+      };
+
+      // Listen for incoming real-time messages across ALL transports (WebRTC, Supabase Realtime, BroadcastChannel)
+      TransportManager.onIncomingMessage = (newMsg: Message) => {
+        console.log('Incoming message handled in UI:', newMsg);
+
+        // Update messages state if active conversation matches
+        if (activeConversationIdRef.current === newMsg.conversationId) {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
+            return [...prev, newMsg];
+          });
+          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+        }
+
+        // Update conversations snippet & unread count
+        setConversations((prev) => {
+          const index = prev.findIndex((c) => c.id === newMsg.conversationId);
+          if (index >= 0) {
+            const updated = [...prev];
+            const isCurrentChat = activeConversationIdRef.current === newMsg.conversationId;
+            updated[index] = {
+              ...updated[index],
+              lastMessageSnippet: newMsg.content,
+              lastMessageTimestamp: newMsg.timestamp,
+              unreadCount: isCurrentChat ? 0 : (updated[index].unreadCount || 0) + 1,
+              updatedAt: Date.now(),
+            };
+            return updated.sort((a, b) => b.updatedAt - a.updatedAt);
+          } else {
+            // New conversation discovered
+            const brandNewConv: Conversation = {
+              id: newMsg.conversationId,
+              type: 'direct',
+              participantIds: [newMsg.senderId, newMsg.recipientId || ''].filter(Boolean),
+              lastMessageSnippet: newMsg.content,
+              lastMessageTimestamp: newMsg.timestamp,
+              unreadCount: activeConversationIdRef.current === newMsg.conversationId ? 0 : 1,
+              updatedAt: Date.now(),
+            };
+            return [brandNewConv, ...prev];
+          }
+        });
       };
 
       const user = await IdentityService.getActiveProfile();
       if (user) {
         setProfile(user);
         await loadUserData(user.id);
+        // Connect Live Supabase Realtime WebSocket for instant cross-device delivery
+        SupabaseRealtimeService.getInstance().initForUser(user.id, user.username);
       }
       setIsInitializing(false);
     }
@@ -175,7 +231,7 @@ export const App: React.FC = () => {
           senderDeviceId: 'peer_dev',
           recipientId: profile?.id,
           type: 'text',
-          content: 'Assalamu Alaikum! Welcome to Shongjog (সংযোগ). Send a voice note or start a direct call!',
+          content: 'Assalamu Alaikum! Welcome to Shongjog (সংযোগ). Send a message, voice note, or start a direct call!',
           timestamp: Date.now() - 1000 * 60 * 8,
           status: 'read',
           transport: 'internet_supabase',
@@ -362,6 +418,7 @@ export const App: React.FC = () => {
           onProfileCreated={(newProfile) => {
             setProfile(newProfile);
             loadUserData(newProfile.id);
+            SupabaseRealtimeService.getInstance().initForUser(newProfile.id, newProfile.username);
           }}
         />
       )}
@@ -369,6 +426,32 @@ export const App: React.FC = () => {
       {/* Acoustic Soundwave Voice Call Overlay */}
       {activeCallSession && profile && (
         <AudioCallModal session={activeCallSession} localUserId={profile.id} />
+      )}
+
+      {/* Offline Direct Device Pairing Modal (Zero Internet) */}
+      {showPairingModal && profile && (
+        <OfflinePairingModal
+          localUserId={profile.id}
+          localUserName={profile.displayName}
+          onClose={() => setShowPairingModal(false)}
+          onConnectedPeer={async (peerId, peerName) => {
+            setShowPairingModal(false);
+            const existing = contacts.find((c) => c.id === peerId);
+            if (!existing) {
+              const newContact: Contact = {
+                id: peerId,
+                displayName: peerName,
+                username: peerName.toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'offline_peer',
+                phoneNumber: 'Offline Direct Mesh',
+                isBlocked: false,
+                lastSeen: Date.now(),
+              };
+              setContacts((prev) => [newContact, ...prev]);
+              const db = await getDatabase();
+              await db.put('contacts', newContact);
+            }
+          }}
+        />
       )}
 
       {/* ==========================================================================
@@ -430,6 +513,15 @@ export const App: React.FC = () => {
           </div>
 
           <div className="header-tools-cluster">
+            {/* Offline Direct Pairing Button */}
+            <button
+              type="button"
+              className="icon-button-lux direct-pair-btn"
+              onClick={() => setShowPairingModal(true)}
+              title="Offline Direct Device Pairing (Zero Internet Hotspot / LAN)"
+            >
+              <WifiOff size={18} />
+            </button>
             <button
               type="button"
               className="icon-button-lux new-chat-btn"

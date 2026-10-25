@@ -246,7 +246,7 @@ export class CallManager {
     this.resetSession();
   }
 
-  private handleCallResponse(msg: any) {
+  public handleCallResponse(msg: any) {
     if (!this.currentSession || this.currentSession.direction !== 'outgoing') return;
 
     if (msg.payload?.accepted) {

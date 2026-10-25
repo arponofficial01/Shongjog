@@ -1,13 +1,14 @@
 // Transport Manager
 // Evaluates platform capabilities, routes outgoing messages through the optimal available transport,
-// and enforces idempotent delivery and status reporting
+// and enforces idempotent delivery and status reporting across WebRTC, Supabase Realtime, and Outbox
 
 import { getDatabase } from '../db/database';
 import type { Message, TransportType, Conversation } from '../db/database';
 import { WebRTCService } from './webrtcService';
 import { SyncEngine } from '../sync/syncEngine';
 import { CryptoService } from '../crypto/cryptoService';
-import { getSupabaseConfig, getSupabase } from '../supabase/supabaseClient';
+import { getSupabaseConfig } from '../supabase/supabaseClient';
+import { SupabaseRealtimeService } from './supabaseRealtimeService';
 
 export interface TransportStatus {
   isOnlineInternet: boolean;
@@ -20,11 +21,52 @@ export interface TransportStatus {
 export class TransportManager {
   private static activeP2PPeers: Set<string> = new Set();
   private static statusListeners: ((status: TransportStatus) => void)[] = [];
+  private static broadcastChannel: BroadcastChannel | null = null;
+
+  public static onIncomingMessage?: (msg: Message) => void;
 
   public static init() {
     window.addEventListener('online', () => this.notifyStatusChange());
     window.addEventListener('offline', () => this.notifyStatusChange());
     SyncEngine.init();
+
+    // 1. Setup local BroadcastChannel for offline tabs/devices testing
+    try {
+      this.broadcastChannel = new BroadcastChannel('offline_mesh_chat');
+      this.broadcastChannel.onmessage = async (event) => {
+        const msg: Message = event.data;
+        if (msg && msg.id) {
+          console.log('Local BroadcastChannel message received:', msg);
+          const db = await getDatabase();
+          await db.put('messages', msg);
+          await this.updateConversationSnippet(msg);
+          if (this.onIncomingMessage) {
+            this.onIncomingMessage(msg);
+          }
+        }
+      };
+    } catch (e) {
+      console.warn('BroadcastChannel not available', e);
+    }
+
+    // 2. Setup Supabase Realtime incoming message listener
+    SupabaseRealtimeService.onMessageReceived = async (msg) => {
+      console.log('Supabase Realtime incoming message:', msg);
+      if (this.onIncomingMessage) {
+        this.onIncomingMessage(msg);
+      }
+    };
+
+    // 3. Setup WebRTC DataChannel incoming message listener
+    WebRTCService.onChatMessageReceived = async (msg) => {
+      console.log('WebRTC DataChannel incoming message:', msg);
+      const db = await getDatabase();
+      await db.put('messages', msg);
+      await this.updateConversationSnippet(msg);
+      if (this.onIncomingMessage) {
+        this.onIncomingMessage(msg);
+      }
+    };
   }
 
   public static registerPeerConnected(peerId: string) {
@@ -91,6 +133,15 @@ export class TransportManager {
 
     const peerId = targetPeerId || message.recipientId;
 
+    // Always broadcast to local channel (for instant offline multi-tab / same-machine delivery)
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage(message);
+      } catch (err) {
+        console.warn('BroadcastChannel post error', err);
+      }
+    }
+
     // Strategy 1: Direct WebRTC LAN (Zero Internet, Peer Connected)
     if (peerId && this.isPeerDirectlyConnected(peerId)) {
       const rtc = WebRTCService.getInstance(message.senderId, peerId);
@@ -115,32 +166,12 @@ export class TransportManager {
       }
     }
 
-    // Strategy 2: Internet Supabase Sync (When online)
+    // Strategy 2: Live Supabase Realtime WebSocket (Instant <50ms delivery across any internet connection)
     const { isConfigured } = getSupabaseConfig();
-    if (navigator.onLine && isConfigured) {
+    if (navigator.onLine && isConfigured && peerId) {
       try {
-        const supabase = getSupabase();
-        const { error } = await supabase.from('messages').insert({
-          id: message.id,
-          conversation_id: message.conversationId,
-          sender_id: message.senderId,
-          sender_device_id: message.senderDeviceId,
-          recipient_id: message.recipientId || null,
-          type: message.type,
-          content: message.content,
-          media_url: message.media?.url || null,
-          file_name: message.media?.fileName || null,
-          file_size: message.media?.fileSize || null,
-          mime_type: message.media?.mimeType || null,
-          duration_seconds: message.media?.durationSeconds || null,
-          transport: 'internet_supabase',
-          status: 'delivered',
-          signature: message.signature,
-          is_delivered_direct_offline: false,
-          created_at: new Date(message.timestamp).toISOString(),
-        });
-
-        if (!error) {
+        const sent = await SupabaseRealtimeService.getInstance().dispatchDirectMessage(peerId, message);
+        if (sent) {
           message.transport = 'internet_supabase';
           message.status = 'delivered';
           await db.put('messages', message);
@@ -148,7 +179,7 @@ export class TransportManager {
           return { message, transportUsed: 'internet_supabase' };
         }
       } catch (err) {
-        console.warn('Cloud dispatch failed, falling back to outbox queue', err);
+        console.warn('Realtime cloud dispatch failed, falling back to outbox queue', err);
       }
     }
 

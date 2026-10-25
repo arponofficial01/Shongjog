@@ -63,8 +63,11 @@ export class WebRTCService {
     }
   }
 
+  public static globalSignalingDelegate?: (msg: SignalingMessage) => void;
+  public static onChatMessageReceived?: (msg: any) => void;
+
   public sendSignalingMessage(msg: SignalingMessage) {
-    // 1. Try local BroadcastChannel
+    // 1. Try local BroadcastChannel (offline / same-host)
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage(msg);
@@ -75,6 +78,9 @@ export class WebRTCService {
     // 2. Delegate to external caller (e.g. Supabase Realtime or Manual Pairing UI)
     if (this.onSignalingMessageNeeded) {
       this.onSignalingMessageNeeded(msg);
+    }
+    if (WebRTCService.globalSignalingDelegate) {
+      WebRTCService.globalSignalingDelegate(msg);
     }
   }
 
@@ -195,18 +201,23 @@ export class WebRTCService {
     };
 
     this.dataChannel.onmessage = (event) => {
-      if (this.onDataReceived) {
-        if (typeof event.data === 'string') {
-          try {
-            const parsed = JSON.parse(event.data);
-            this.onDataReceived(parsed);
-          } catch {
-            this.onDataReceived(event.data);
-          }
-        } else {
-          // Binary arraybuffer (file chunk or voice data)
-          this.onDataReceived(event.data);
+      let payload: any = event.data;
+      if (typeof event.data === 'string') {
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          payload = event.data;
         }
+      }
+
+      if (payload && payload.protocol === 'chat_message' && payload.message) {
+        if (WebRTCService.onChatMessageReceived) {
+          WebRTCService.onChatMessageReceived(payload.message);
+        }
+      }
+
+      if (this.onDataReceived) {
+        this.onDataReceived(payload);
       }
     };
   }
