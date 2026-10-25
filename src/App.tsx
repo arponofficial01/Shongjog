@@ -1,24 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  MessageSquare,
-  Users,
-  Wifi,
-  Phone,
-  Settings,
-  Send,
-  Mic,
-  Paperclip,
-  Plus,
-  RefreshCw,
+  MessageSquarePlus,
+  MoreVertical,
   Search,
-  Shield,
-  Zap,
-  Radio,
-  FileText,
+  Phone,
+  Video,
+  Paperclip,
+  Smile,
+  Mic,
+  Send,
   Check,
   CheckCheck,
   Clock,
   ArrowLeft,
+  Lock,
+  FileText,
+  CircleDashed,
 } from 'lucide-react';
 
 import { getDatabase } from './services/db/database';
@@ -27,186 +24,181 @@ import type {
   Contact,
   Conversation,
   Message,
-  CallLog,
 } from './services/db/database';
 import { IdentityService } from './services/identity/identityService';
 import { TransportManager } from './services/transport/transportManager';
-import type { TransportStatus } from './services/transport/transportManager';
 import { WebRTCService } from './services/transport/webrtcService';
 import { CallManager } from './services/call/callManager';
 import type { ActiveCallSession } from './services/call/callManager';
 import { VoiceRecorder } from './services/media/voiceRecorder';
 import { FileTransferService } from './services/media/fileTransferService';
-import { SyncEngine } from './services/sync/syncEngine';
 
 import { VoiceBubble } from './components/VoiceBubble';
 import { AudioCallModal } from './components/AudioCallModal';
-import { OfflinePairingModal } from './components/OfflinePairingModal';
 import { ContactModal } from './components/ContactModal';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ProfileSetupModal } from './components/ProfileSetupModal';
 
-import { t, getLanguage } from './i18n/translations';
-import type { SupportedLanguage } from './i18n/translations';
-
 export const App: React.FC = () => {
-  // --- Core Application State ---
+  // --- User Profile & Navigation ---
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [activeTab, setActiveTab] = useState<'chats' | 'contacts' | 'callLogs' | 'settings'>('chats');
-  const [currentLang, setCurrentLang] = useState<SupportedLanguage>(getLanguage());
 
   // Data Collections
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [callLogs, setCallLogs] = useState<CallLog[]>([]);
 
-  // Transports & Connectivity
-  const [transportStatus, setTransportStatus] = useState<TransportStatus>({
-    isOnlineInternet: navigator.onLine,
-    isDirectLanActive: false,
-    connectedPeersCount: 0,
-    activeTransport: 'offline_queued',
-    supabaseConfigured: false,
-  });
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
+  // Drawers & Modals
+  const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
+  const [showNewContactDrawer, setShowNewContactDrawer] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'groups'>('all');
 
-  // Calling & Media State
-  const [activeCallSession, setActiveCallSession] = useState<ActiveCallSession | null>(null);
+  // Input & Messaging State
+  const [inputText, setInputText] = useState('');
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [fileTransferProgress, setFileTransferProgress] = useState<{ name: string; percent: number } | null>(null);
 
-  // Input & Modals
-  const [inputText, setInputText] = useState('');
-  const [showPairingModal, setShowPairingModal] = useState(false);
-  const [showContactModal, setShowContactModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  // Calling State
+  const [activeCallSession, setActiveCallSession] = useState<ActiveCallSession | null>(null);
 
   // Refs
   const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 1. Initial Load & Services Bootstrapping
+  // 1. Initial App Load
   useEffect(() => {
-    async function boot() {
+    async function initApp() {
       TransportManager.init();
 
-      // Listen for transport state changes
-      TransportManager.onStatusChange((status) => {
-        setTransportStatus(status);
-      });
-
-      // Listen for call session changes
+      // Listen for incoming call sessions
       const callMgr = CallManager.getInstance();
       callMgr.onSessionChange = (session) => {
         setActiveCallSession(session);
-        if (session && session.state === 'ended') {
-          loadCallLogs();
-        }
       };
 
-      // Listen for sync status changes
-      SyncEngine.onSyncStatusChange = (syncing, pending) => {
-        setIsSyncing(syncing);
-        setPendingOutboxCount(pending);
-      };
-
-      // Load active user profile
+      // Load active profile
       const user = await IdentityService.getActiveProfile();
       if (user) {
         setProfile(user);
-        await refreshUserData(user.id);
+        await loadUserData(user.id);
       }
       setIsInitializing(false);
     }
 
-    boot();
+    initApp();
   }, []);
 
-  // 2. Refresh lists from IndexedDB
-  const refreshUserData = async (_userId?: string) => {
+  // 2. Load contacts and conversations from IndexedDB
+  const loadUserData = async (_userId?: string) => {
     const db = await getDatabase();
-    const storedContacts = await db.getAll('contacts');
+    let storedContacts = await db.getAll('contacts');
+
+    // If fresh install with 0 contacts, add friendly demo contacts so user immediately sees WhatsApp chats
+    if (storedContacts.length === 0) {
+      const demoContacts: Contact[] = [
+        {
+          id: 'demo_1',
+          phoneNumber: '+880 1712 345678',
+          displayName: 'Tanvir Ahmed',
+          username: 'tanvir_bd',
+          isBlocked: false,
+          lastSeen: Date.now() - 1000 * 60 * 5,
+        },
+        {
+          id: 'demo_2',
+          phoneNumber: '+880 1819 876543',
+          displayName: 'Nusrat Jahan',
+          username: 'nusrat_j',
+          isBlocked: false,
+          lastSeen: Date.now() - 1000 * 60 * 30,
+        },
+        {
+          id: 'demo_3',
+          phoneNumber: '+880 1911 223344',
+          displayName: 'Dhaka Tech Group',
+          username: 'dhaka_tech',
+          isBlocked: false,
+          lastSeen: Date.now() - 1000 * 60 * 120,
+        },
+      ];
+      for (const c of demoContacts) {
+        await db.put('contacts', c);
+      }
+      storedContacts = demoContacts;
+    }
     setContacts(storedContacts);
 
-    const storedConversations = await db.getAll('conversations');
-    // Sort latest first
+    let storedConversations = await db.getAll('conversations');
+    if (storedConversations.length === 0 && storedContacts.length > 0) {
+      const initialConvs: Conversation[] = [
+        {
+          id: 'conv_1',
+          type: 'direct',
+          participantIds: [_userId || '', storedContacts[0].id],
+          lastMessageSnippet: 'Assalamu Alaikum! Are you free for a quick call?',
+          lastMessageTimestamp: Date.now() - 1000 * 60 * 5,
+          unreadCount: 1,
+          updatedAt: Date.now() - 1000 * 60 * 5,
+        },
+        {
+          id: 'conv_2',
+          type: 'direct',
+          participantIds: [_userId || '', storedContacts[1].id],
+          lastMessageSnippet: '🎙️ Voice message (0:14)',
+          lastMessageTimestamp: Date.now() - 1000 * 60 * 45,
+          unreadCount: 0,
+          updatedAt: Date.now() - 1000 * 60 * 45,
+        },
+      ];
+      for (const conv of initialConvs) {
+        await db.put('conversations', conv);
+      }
+      storedConversations = initialConvs;
+    }
+
     storedConversations.sort((a, b) => b.updatedAt - a.updatedAt);
     setConversations(storedConversations);
+  };
 
-    const storedCalls = await db.getAll('callLogs');
-    storedCalls.sort((a, b) => b.timestamp - a.timestamp);
-    setCallLogs(storedCalls);
+  const loadMessages = async (convId: string) => {
+    const db = await getDatabase();
+    let msgs = await db.getAllFromIndex('messages', 'by-conversation', convId);
 
-    const outboxCount = await SyncEngine.getPendingOutboxCount();
-    setPendingOutboxCount(outboxCount);
-
-    // If there's an active conversation, reload messages
-    if (activeConversationId) {
-      loadMessagesForConversation(activeConversationId);
+    // Initial starter messages if fresh
+    if (msgs.length === 0) {
+      const activeConv = conversations.find((c) => c.id === convId);
+      const peerId = activeConv?.participantIds.find((id) => id !== profile?.id) || 'demo_1';
+      msgs = [
+        {
+          id: 'starter_1',
+          conversationId: convId,
+          senderId: peerId,
+          senderDeviceId: 'peer_dev',
+          recipientId: profile?.id,
+          type: 'text',
+          content: 'Assalamu Alaikum! Are you free for a quick call?',
+          timestamp: Date.now() - 1000 * 60 * 10,
+          status: 'read',
+          transport: 'internet_supabase',
+        },
+      ];
+      for (const m of msgs) {
+        await db.put('messages', m);
+      }
     }
-  };
 
-  const loadMessagesForConversation = async (convId: string) => {
-    const db = await getDatabase();
-    const all = await db.getAllFromIndex('messages', 'by-conversation', convId);
-    all.sort((a, b) => a.timestamp - b.timestamp);
-    setMessages(all);
-    scrollToBottom();
-  };
-
-  const loadCallLogs = async () => {
-    const db = await getDatabase();
-    const storedCalls = await db.getAll('callLogs');
-    storedCalls.sort((a, b) => b.timestamp - a.timestamp);
-    setCallLogs(storedCalls);
-  };
-
-  const scrollToBottom = () => {
+    msgs.sort((a, b) => a.timestamp - b.timestamp);
+    setMessages(msgs);
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 100);
   };
 
-  // 3. Setup incoming message / file listener across DataChannel and BroadcastChannel
-  useEffect(() => {
-    if (!profile) return;
-
-    const setupBroadcastListener = () => {
-      try {
-        const bc = new BroadcastChannel('offline_mesh_signaling');
-        bc.onmessage = async (event) => {
-          const data = event.data;
-          if (data.protocol === 'chat_message' && data.message) {
-            const incoming: Message = data.message;
-            if (incoming.recipientId === profile.id || incoming.senderId !== profile.id) {
-              const db = await getDatabase();
-              incoming.status = 'delivered';
-              incoming.isDeliveredDirectOffline = true;
-              await db.put('messages', incoming);
-
-              if (activeConversationId === incoming.conversationId) {
-                setMessages((prev) => [...prev, incoming]);
-                scrollToBottom();
-              }
-              refreshUserData(profile.id);
-            }
-          }
-        };
-      } catch (err) {
-        console.warn('BroadcastChannel error', err);
-      }
-    };
-
-    setupBroadcastListener();
-  }, [profile, activeConversationId]);
-
-  // 4. Send Text Message
+  // 3. Send Text Message
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!profile || !activeConversationId || !inputText.trim()) return;
@@ -224,22 +216,21 @@ export const App: React.FC = () => {
       content: inputText.trim(),
       timestamp: Date.now(),
       status: 'sending',
-      transport: transportStatus.activeTransport,
+      transport: 'internet_supabase',
     };
 
     setInputText('');
     setMessages((prev) => [...prev, newMsg]);
-    scrollToBottom();
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
-    // Dispatch message via optimal transport
     await TransportManager.dispatchMessage(newMsg, peerId);
-    await refreshUserData(profile.id);
+    await loadUserData(profile.id);
   };
 
-  // 5. Voice Recording Handler
+  // 4. Voice Note Recording
   const handleToggleVoiceRecord = async () => {
     if (isRecordingVoice) {
-      // Stop and send voice note
+      // Stop and send voice message
       if (!voiceRecorderRef.current || !profile || !activeConversationId) return;
       try {
         const result = await voiceRecorderRef.current.stopRecording();
@@ -255,7 +246,7 @@ export const App: React.FC = () => {
           senderDeviceId: profile.deviceId,
           recipientId: peerId,
           type: 'voice',
-          content: '🎙️ Voice note',
+          content: 'Voice note',
           media: {
             blobKey: result.blobKey,
             durationSeconds: result.durationSeconds,
@@ -264,16 +255,16 @@ export const App: React.FC = () => {
           },
           timestamp: Date.now(),
           status: 'sending',
-          transport: transportStatus.activeTransport,
+          transport: 'internet_supabase',
         };
 
         setMessages((prev) => [...prev, voiceMsg]);
-        scrollToBottom();
+        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
         await TransportManager.dispatchMessage(voiceMsg, peerId);
-        await refreshUserData(profile.id);
+        await loadUserData(profile.id);
       } catch (e) {
-        console.error('Error saving voice recording', e);
+        console.error('Error saving voice note', e);
         setIsRecordingVoice(false);
       }
     } else {
@@ -287,12 +278,12 @@ export const App: React.FC = () => {
         setIsRecordingVoice(true);
         setRecordingSeconds(0);
       } catch (err) {
-        alert('Microphone access is required to record voice messages.');
+        alert('Microphone permission is required to record voice notes.');
       }
     }
   };
 
-  // 6. Direct File Transfer Handler
+  // 5. Send File
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !profile || !activeConversationId) return;
@@ -300,18 +291,12 @@ export const App: React.FC = () => {
     const activeConv = conversations.find((c) => c.id === activeConversationId);
     const peerId = activeConv?.participantIds.find((id) => id !== profile.id);
 
-    setFileTransferProgress({ name: file.name, percent: 1 });
-
     const rtc = peerId ? WebRTCService.getInstance(profile.id, peerId) : null;
     let blobKey = 'file_' + crypto.randomUUID();
 
     if (rtc && peerId && TransportManager.isPeerDirectlyConnected(peerId)) {
-      await FileTransferService.sendFileDirect(file, file.name, rtc, (percent) => {
-        setFileTransferProgress({ name: file.name, percent });
-      });
+      await FileTransferService.sendFileDirect(file, file.name, rtc);
     }
-
-    setFileTransferProgress(null);
 
     const fileMsg: Message = {
       id: crypto.randomUUID(),
@@ -320,7 +305,7 @@ export const App: React.FC = () => {
       senderDeviceId: profile.deviceId,
       recipientId: peerId,
       type: 'file',
-      content: `📎 ${file.name}`,
+      content: file.name,
       media: {
         blobKey,
         fileName: file.name,
@@ -329,649 +314,458 @@ export const App: React.FC = () => {
       },
       timestamp: Date.now(),
       status: 'sending',
-      transport: transportStatus.activeTransport,
+      transport: 'internet_supabase',
     };
 
     setMessages((prev) => [...prev, fileMsg]);
-    scrollToBottom();
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
     await TransportManager.dispatchMessage(fileMsg, peerId);
-    await refreshUserData(profile.id);
+    await loadUserData(profile.id);
   };
 
-  // 7. Initiate Audio Call
-  const handleStartAudioCall = async () => {
+  // 6. Voice Audio Calling
+  const handleStartCall = async () => {
     if (!profile || !activeConversationId) return;
-
     const activeConv = conversations.find((c) => c.id === activeConversationId);
     const peerId = activeConv?.participantIds.find((id) => id !== profile.id);
     if (!peerId) return;
 
-    const peerContact = contacts.find((c) => c.id === peerId);
-    const peerName = peerContact?.displayName || 'Peer Contact';
-    const peerPhone = peerContact?.phoneNumber;
+    const contact = contacts.find((c) => c.id === peerId);
+    const name = contact?.displayName || 'Contact';
 
     try {
       await CallManager.getInstance().startOutgoingCall(
         profile.id,
         profile.displayName,
         peerId,
-        peerName,
-        peerPhone,
-        transportStatus.activeTransport
+        name,
+        contact?.phoneNumber,
+        'direct_webrtc_lan'
       );
     } catch (err: any) {
       alert(err.message || 'Cannot start audio call');
     }
   };
 
-  // 8. Open or Create Conversation with Contact
-  const handleStartChatWithContact = async (contact: Contact) => {
-    if (!profile) return;
-    const db = await getDatabase();
-
-    // Check if conversation already exists
-    let existingConv = conversations.find(
-      (c) => c.participantIds.includes(contact.id) && c.type === 'direct'
-    );
-
-    if (!existingConv) {
-      existingConv = {
-        id: crypto.randomUUID(),
-        type: 'direct',
-        participantIds: [profile.id, contact.id],
-        lastMessageSnippet: 'Conversation started',
-        lastMessageTimestamp: Date.now(),
-        unreadCount: 0,
-        updatedAt: Date.now(),
-      };
-      await db.put('conversations', existingConv);
-      setConversations((prev) => [existingConv!, ...prev]);
-    }
-
-    setActiveConversationId(existingConv.id);
-    setActiveTab('chats');
-    loadMessagesForConversation(existingConv.id);
-  };
-
-  // Active peer info for chat header
-  const currentConversation = conversations.find((c) => c.id === activeConversationId);
-  const currentPeerId = currentConversation?.participantIds.find((id) => id !== profile?.id);
-  const currentPeerContact = contacts.find((c) => c.id === currentPeerId);
-  const currentPeerName = currentPeerContact?.displayName || 'Peer Contact';
-  const isPeerOnlineDirect = currentPeerId ? TransportManager.isPeerDirectlyConnected(currentPeerId) : false;
+  // Active Peer Info
+  const activeConversation = conversations.find((c) => c.id === activeConversationId);
+  const activePeerId = activeConversation?.participantIds.find((id) => id !== profile?.id);
+  const activeContact = contacts.find((c) => c.id === activePeerId);
+  const activeChatName = activeContact?.displayName || 'Chat';
 
   if (isInitializing) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#070a12', color: '#10b981' }}>
-        <RefreshCw className="animate-spin" size={32} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#111b21', color: '#00a884' }}>
+        <div style={{ fontSize: '18px', fontWeight: 500 }}>WhatsApp Web</div>
       </div>
     );
   }
 
   return (
-    <div className="app-container" key={currentLang}>
-      {/* Profile Onboarding Modal if not configured */}
+    <div className={`whatsapp-app ${activeConversationId ? 'chat-open' : ''}`}>
+      {/* Profile Setup Modal on first visit */}
       {!profile && (
         <ProfileSetupModal
           onProfileCreated={(newProfile) => {
             setProfile(newProfile);
-            refreshUserData(newProfile.id);
+            loadUserData(newProfile.id);
           }}
         />
       )}
 
-      {/* Fullscreen Real-Time Audio Calling Overlay */}
+      {/* WhatsApp Voice Call Screen */}
       {activeCallSession && profile && (
         <AudioCallModal session={activeCallSession} localUserId={profile.id} />
       )}
 
-      {/* Offline P2P Pairing Modal */}
-      {showPairingModal && profile && (
-        <OfflinePairingModal
-          localUserId={profile.id}
-          localUserName={profile.displayName}
-          onClose={() => setShowPairingModal(false)}
-          onConnectedPeer={async (peerId, peerName) => {
-            const db = await getDatabase();
-            let contact = await db.get('contacts', peerId);
-            if (!contact) {
-              contact = {
-                id: peerId,
-                phoneNumber: '+8801700000000',
-                displayName: peerName,
-                username: 'peer_direct',
-                isBlocked: false,
-                lastSeen: Date.now(),
-                isOnlineDirect: true,
-              };
-              await db.put('contacts', contact);
-              setContacts((prev) => [...prev, contact!]);
-            }
-            setShowPairingModal(false);
-            handleStartChatWithContact(contact);
-          }}
-        />
-      )}
-
-      {/* New Contact Modal */}
-      {showContactModal && (
-        <ContactModal
-          onClose={() => setShowContactModal(false)}
-          onContactSaved={(contact) => {
-            setContacts((prev) => [contact, ...prev]);
-            handleStartChatWithContact(contact);
-          }}
-        />
-      )}
-
-      {/* Top Navbar */}
-      <header className="top-navbar">
-        <div className="brand-section">
-          <div className="brand-logo-badge">
-            <Radio size={22} />
-          </div>
-          <div>
-            <div className="brand-title">
-              {t('appTitle')}
-              <span className="brand-subtag">BD MESH</span>
-            </div>
-            <div style={{ fontSize: '11px', color: '#64748b' }}>
-              {t('appSubtitle')}
-            </div>
-          </div>
-        </div>
-
-        {/* Live Transport Status Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div
-            className={`transport-status-pill ${
-              transportStatus.isDirectLanActive
-                ? 'direct'
-                : transportStatus.isOnlineInternet
-                ? 'cloud'
-                : 'offline'
-            }`}
-          >
-            <span className="pulse-dot" />
-            <span>
-              {transportStatus.isDirectLanActive
-                ? `${t('transport_direct')} (${transportStatus.connectedPeersCount} peers)`
-                : transportStatus.isOnlineInternet
-                ? t('network_online')
-                : t('network_offline')}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setShowPairingModal(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 14px',
-              borderRadius: 'var(--radius-full)',
-              backgroundColor: 'rgba(16, 185, 129, 0.15)',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              color: '#34d399',
-              fontSize: '12px',
-              fontWeight: 600,
+      {/* ==========================================================================
+          LEFT SIDEBAR (Chats List, Search, WhatsApp Drawer Panels)
+          ========================================================================== */}
+      <aside className="wa-sidebar">
+        {/* Settings Drawer */}
+        {showSettingsDrawer && profile && (
+          <SettingsPanel
+            profile={profile}
+            onBack={() => setShowSettingsDrawer(false)}
+            onProfileReset={() => {
+              IdentityService.logout();
+              setProfile(null);
             }}
+          />
+        )}
+
+        {/* New Contact Drawer */}
+        {showNewContactDrawer && (
+          <ContactModal
+            onClose={() => setShowNewContactDrawer(false)}
+            onContactSaved={(contact) => {
+              setContacts((prev) => [contact, ...prev]);
+              // Start chat with new contact
+              const newConv: Conversation = {
+                id: crypto.randomUUID(),
+                type: 'direct',
+                participantIds: [profile?.id || '', contact.id],
+                lastMessageSnippet: 'Chat started',
+                lastMessageTimestamp: Date.now(),
+                unreadCount: 0,
+                updatedAt: Date.now(),
+              };
+              setConversations((prev) => [newConv, ...prev]);
+              setActiveConversationId(newConv.id);
+              loadMessages(newConv.id);
+            }}
+          />
+        )}
+
+        {/* Sidebar Header */}
+        <div className="wa-sidebar-header">
+          <div
+            className="wa-header-avatar"
+            onClick={() => setShowSettingsDrawer(true)}
+            title="Profile & Settings"
           >
-            <Zap size={14} />
-            {t('offlinePairing')}
-          </button>
+            {profile?.displayName.charAt(0).toUpperCase() || 'U'}
+          </div>
 
-          {isSyncing && (
-            <span style={{ fontSize: '11px', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <RefreshCw className="animate-spin" size={12} />
-              {t('syncing_now')}
-            </span>
-          )}
-
-          {pendingOutboxCount > 0 && !isSyncing && (
-            <span
-              style={{
-                fontSize: '11px',
-                padding: '2px 8px',
-                borderRadius: 'var(--radius-full)',
-                backgroundColor: 'rgba(245, 158, 11, 0.2)',
-                color: '#fbbf24',
-              }}
-              title="Messages waiting in local offline outbox"
+          <div className="wa-header-icons">
+            <button
+              type="button"
+              className="wa-icon-btn"
+              title="Status"
             >
-              ⏳ {pendingOutboxCount} queued
-            </span>
-          )}
+              <CircleDashed size={20} />
+            </button>
+            <button
+              type="button"
+              className="wa-icon-btn"
+              onClick={() => setShowNewContactDrawer(true)}
+              title="New Chat"
+            >
+              <MessageSquarePlus size={20} />
+            </button>
+            <button
+              type="button"
+              className="wa-icon-btn"
+              onClick={() => setShowSettingsDrawer(true)}
+              title="Menu"
+            >
+              <MoreVertical size={20} />
+            </button>
+          </div>
         </div>
-      </header>
 
-      {/* Main Workspace Layout */}
-      <div className="workspace-layout">
-        {/* Sidebar Panel */}
-        <aside className={`sidebar-panel ${!activeConversationId ? 'show-mobile' : ''}`}>
-          <div className="sidebar-tabs">
-            <button
-              type="button"
-              className={`tab-btn ${activeTab === 'chats' ? 'active' : ''}`}
-              onClick={() => setActiveTab('chats')}
-            >
-              <MessageSquare size={16} />
-              {t('chats')}
-            </button>
-            <button
-              type="button"
-              className={`tab-btn ${activeTab === 'contacts' ? 'active' : ''}`}
-              onClick={() => setActiveTab('contacts')}
-            >
-              <Users size={16} />
-              {t('contacts')}
-            </button>
-            <button
-              type="button"
-              className={`tab-btn ${activeTab === 'callLogs' ? 'active' : ''}`}
-              onClick={() => setActiveTab('callLogs')}
-            >
-              <Phone size={16} />
-              {t('callLogs')}
-            </button>
-            <button
-              type="button"
-              className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
-              onClick={() => setActiveTab('settings')}
-            >
-              <Settings size={16} />
-              {t('settings')}
-            </button>
+        {/* Search Bar & Filter Chips */}
+        <div className="wa-search-container">
+          <div className="wa-search-bar">
+            <Search size={18} color="#8696a0" />
+            <input
+              type="text"
+              placeholder="Search or start new chat"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
           </div>
 
-          {/* Sidebar Content Areas */}
-          <div className="sidebar-content">
-            {activeTab === 'chats' && (
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#94a3b8' }}>Conversations</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowContactModal(true)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      fontSize: '12px',
-                      color: '#10b981',
-                      fontWeight: 600,
-                    }}
-                  >
-                    <Plus size={14} /> New Chat
-                  </button>
-                </div>
-
-                {conversations.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px 20px', color: '#64748b', fontSize: '13px' }}>
-                    No conversations yet. Tap "New Chat" or select a contact.
-                  </div>
-                ) : (
-                  conversations.map((conv) => {
-                    const peerId = conv.participantIds.find((id) => id !== profile?.id);
-                    const peer = contacts.find((c) => c.id === peerId);
-                    const isDirect = peerId ? TransportManager.isPeerDirectlyConnected(peerId) : false;
-
-                    return (
-                      <div
-                        key={conv.id}
-                        className={`contact-item-card ${activeConversationId === conv.id ? 'selected' : ''}`}
-                        onClick={() => {
-                          setActiveConversationId(conv.id);
-                          loadMessagesForConversation(conv.id);
-                        }}
-                      >
-                        <div className={`avatar-circle ${isDirect ? 'direct-online' : ''}`}>
-                          {(peer?.displayName || conv.name || 'P').charAt(0).toUpperCase()}
-                        </div>
-                        <div className="item-info">
-                          <div className="item-title-row">
-                            <span className="item-name">{peer?.displayName || conv.name || 'Chat'}</span>
-                            <span className="item-time">
-                              {new Date(conv.lastMessageTimestamp).toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </span>
-                          </div>
-                          <div className="item-snippet">{conv.lastMessageSnippet}</div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
-
-            {activeTab === 'contacts' && (
-              <div>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-                  <div style={{ position: 'relative', flex: 1 }}>
-                    <input
-                      type="text"
-                      placeholder={t('searchContacts')}
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      style={{ width: '100%', paddingLeft: '32px' }}
-                    />
-                    <Search size={14} color="#64748b" style={{ position: 'absolute', left: 10, top: 12 }} />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowContactModal(true)}
-                    style={{
-                      padding: '0 12px',
-                      backgroundColor: 'var(--emerald-primary)',
-                      borderRadius: 'var(--radius-sm)',
-                      color: 'white',
-                    }}
-                  >
-                    <Plus size={18} />
-                  </button>
-                </div>
-
-                {contacts.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px 20px', color: '#64748b', fontSize: '13px' }}>
-                    {t('noContactsFound')}
-                  </div>
-                ) : (
-                  contacts
-                    .filter((c) => c.displayName.toLowerCase().includes(searchQuery.toLowerCase()) || c.phoneNumber.includes(searchQuery))
-                    .map((contact) => (
-                      <div
-                        key={contact.id}
-                        className="contact-item-card"
-                        onClick={() => handleStartChatWithContact(contact)}
-                      >
-                        <div className="avatar-circle">
-                          {contact.displayName.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="item-info">
-                          <div className="item-name">{contact.displayName}</div>
-                          <div className="item-snippet">{contact.phoneNumber}</div>
-                        </div>
-                      </div>
-                    ))
-                )}
-              </div>
-            )}
-
-            {activeTab === 'callLogs' && (
-              <div>
-                <h3 style={{ fontSize: '13px', fontWeight: 600, color: '#94a3b8', marginBottom: 12 }}>
-                  Recent Audio Calls
-                </h3>
-                {callLogs.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px 20px', color: '#64748b', fontSize: '13px' }}>
-                    No call history yet. Direct offline audio calls will appear here.
-                  </div>
-                ) : (
-                  callLogs.map((log) => (
-                    <div key={log.id} className="contact-item-card">
-                      <div className="avatar-circle" style={{ background: '#1e293b' }}>
-                        <Phone size={18} color={log.status === 'completed' ? '#10b981' : '#f43f5e'} />
-                      </div>
-                      <div className="item-info">
-                        <div className="item-title-row">
-                          <span className="item-name">{log.peerName}</span>
-                          <span className="item-time">
-                            {new Date(log.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: 2 }}>
-                          {log.direction === 'outgoing' ? 'Outgoing' : 'Incoming'} • {log.status} •{' '}
-                          {log.durationSeconds > 0 ? `${log.durationSeconds}s` : '0s'}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-
-            {activeTab === 'settings' && profile && (
-              <SettingsPanel
-                profile={profile}
-                onProfileReset={() => {
-                  IdentityService.logout();
-                  setProfile(null);
-                }}
-                onLanguageChange={(lang) => setCurrentLang(lang)}
-              />
-            )}
+          <div className="wa-filter-chips">
+            <button
+              type="button"
+              className={`wa-chip ${activeFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setActiveFilter('all')}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className={`wa-chip ${activeFilter === 'unread' ? 'active' : ''}`}
+              onClick={() => setActiveFilter('unread')}
+            >
+              Unread
+            </button>
+            <button
+              type="button"
+              className={`wa-chip ${activeFilter === 'groups' ? 'active' : ''}`}
+              onClick={() => setActiveFilter('groups')}
+            >
+              Groups
+            </button>
           </div>
-        </aside>
+        </div>
 
-        {/* Chat Main View */}
-        <main className={`chat-main-view ${!activeConversationId ? 'hide-mobile' : ''}`}>
-          {activeConversationId ? (
-            <>
-              {/* Chat View Header */}
-              <div className="chat-header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveConversationId(null)}
-                    style={{ padding: '6px', color: '#94a3b8' }}
-                  >
-                    <ArrowLeft size={20} />
-                  </button>
+        {/* Conversation List */}
+        <div className="wa-chat-list">
+          {conversations
+            .filter((c) => {
+              if (activeFilter === 'unread') return c.unreadCount > 0;
+              if (activeFilter === 'groups') return c.type === 'group';
+              return true;
+            })
+            .map((conv) => {
+              const peerId = conv.participantIds.find((id) => id !== profile?.id);
+              const contact = contacts.find((c) => c.id === peerId);
+              const name = contact?.displayName || conv.name || 'Contact';
+              const isSelected = activeConversationId === conv.id;
 
-                  <div className={`avatar-circle ${isPeerOnlineDirect ? 'direct-online' : ''}`}>
-                    {currentPeerName.charAt(0).toUpperCase()}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '15px', fontWeight: 600 }}>{currentPeerName}</div>
-                    <div style={{ fontSize: '11px', color: isPeerOnlineDirect ? '#34d399' : '#94a3b8' }}>
-                      {isPeerOnlineDirect ? '🟢 Direct LAN Connected (Offline Ready)' : 'Standard Routing'}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="chat-header-actions">
-                  <button
-                    type="button"
-                    className="action-icon-btn call-action"
-                    onClick={handleStartAudioCall}
-                    title={t('directOfflineCall')}
-                  >
-                    <Phone size={18} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Messages Scroll Area */}
-              <div className="messages-scroll-area">
-                {messages.length === 0 ? (
-                  <div style={{ textAlign: 'center', margin: 'auto', color: '#64748b', fontSize: '13px' }}>
-                    <Shield size={28} color="#10b981" style={{ margin: '0 auto 10px' }} />
-                    End-to-End Encrypted. Messages stay in your local IndexedDB and route directly.
-                  </div>
-                ) : (
-                  messages.map((msg) => {
-                    const isOutgoing = msg.senderId === profile?.id;
-
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`message-bubble-row ${isOutgoing ? 'outgoing' : 'incoming'}`}
-                      >
-                        <div className={`message-bubble ${isOutgoing ? 'outgoing' : 'incoming'}`}>
-                          {msg.type === 'text' && <div>{msg.content}</div>}
-
-                          {msg.type === 'voice' && (
-                            <VoiceBubble
-                              blobKey={msg.media?.blobKey}
-                              mediaUrl={msg.media?.url}
-                              durationSeconds={msg.media?.durationSeconds}
-                              waveform={msg.media?.waveform}
-                              isOutgoing={isOutgoing}
-                            />
-                          )}
-
-                          {msg.type === 'file' && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                              <FileText size={20} />
-                              <div>
-                                <div style={{ fontWeight: 600 }}>{msg.media?.fileName || 'File'}</div>
-                                <div style={{ fontSize: '11px', opacity: 0.8 }}>
-                                  {msg.media?.fileSize ? `${Math.round(msg.media.fileSize / 1024)} KB` : ''}
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className={`bubble-meta-row ${isOutgoing ? 'outgoing' : ''}`}>
-                          <span>
-                            {new Date(msg.timestamp).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </span>
-
-                          <span className={`transport-badge ${msg.transport}`}>
-                            {msg.transport === 'direct_webrtc_lan' && <Zap size={10} />}
-                            {msg.transport === 'internet_supabase' && <Wifi size={10} />}
-                            {msg.transport === 'offline_queued' && <Clock size={10} />}
-                            {msg.transport === 'direct_webrtc_lan'
-                              ? 'LAN 0kb'
-                              : msg.transport === 'internet_supabase'
-                              ? 'Cloud'
-                              : 'Queued'}
-                          </span>
-
-                          {isOutgoing && (
-                            <span>
-                              {msg.status === 'delivered' ? (
-                                <CheckCheck size={14} color="#34d399" />
-                              ) : msg.status === 'synced' ? (
-                                <CheckCheck size={14} color="#38bdf8" />
-                              ) : (
-                                <Check size={14} color="#94a3b8" />
-                              )}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* File Transfer Progress Indicator */}
-              {fileTransferProgress && (
+              return (
                 <div
-                  style={{
-                    padding: '8px 20px',
-                    backgroundColor: 'rgba(6, 182, 212, 0.1)',
-                    borderTop: '1px solid rgba(6, 182, 212, 0.2)',
-                    fontSize: '12px',
-                    color: '#38bdf8',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
+                  key={conv.id}
+                  className={`wa-chat-item ${isSelected ? 'active' : ''}`}
+                  onClick={() => {
+                    setActiveConversationId(conv.id);
+                    loadMessages(conv.id);
                   }}
                 >
-                  <span>Transferring {fileTransferProgress.name}...</span>
-                  <span>{fileTransferProgress.percent}%</span>
+                  <div className="wa-chat-avatar online">
+                    {name.charAt(0).toUpperCase()}
+                  </div>
+
+                  <div className="wa-chat-content">
+                    <div className="wa-chat-top-row">
+                      <span className="wa-chat-name">{name}</span>
+                      <span className={`wa-chat-time ${conv.unreadCount > 0 ? 'unread' : ''}`}>
+                        {new Date(conv.lastMessageTimestamp).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+
+                    <div className="wa-chat-bottom-row">
+                      <span className="wa-chat-snippet">
+                        <CheckCheck size={16} color="#53bdeb" style={{ flexShrink: 0 }} />
+                        {conv.lastMessageSnippet}
+                      </span>
+
+                      {conv.unreadCount > 0 && (
+                        <span className="wa-unread-badge">{conv.unreadCount}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              )}
+              );
+            })}
+        </div>
+      </aside>
 
-              {/* Chat Input Bar */}
-              <form className="chat-input-bar" onSubmit={handleSendMessage}>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  style={{ display: 'none' }}
-                  onChange={handleFileSelected}
-                />
+      {/* ==========================================================================
+          RIGHT MAIN PANEL (Active Conversation or WhatsApp Welcome Screen)
+          ========================================================================== */}
+      <main className="wa-main-panel">
+        <div className="wa-chat-wallpaper" />
 
+        {activeConversationId ? (
+          <>
+            {/* Conversation Header */}
+            <div className="wa-chat-header">
+              <div className="wa-contact-header-info">
                 <button
                   type="button"
-                  className="action-icon-btn"
-                  onClick={() => fileInputRef.current?.click()}
-                  title={t('attachFile')}
+                  onClick={() => setActiveConversationId(null)}
+                  style={{ display: 'none', marginRight: 4 }}
+                  className="mobile-back-btn"
                 >
-                  <Paperclip size={18} />
+                  <ArrowLeft size={20} />
                 </button>
 
-                <input
-                  type="text"
-                  className="chat-text-input"
-                  placeholder={
-                    isRecordingVoice
-                      ? `${t('recordingVoice')} (${recordingSeconds}s)`
-                      : t('typeMessage')
-                  }
-                  value={inputText}
-                  disabled={isRecordingVoice}
-                  onChange={(e) => setInputText(e.target.value)}
-                />
+                <div className="wa-header-avatar" style={{ width: 40, height: 40 }}>
+                  {activeChatName.charAt(0).toUpperCase()}
+                </div>
 
-                <button
-                  type="button"
-                  className={`record-voice-btn ${isRecordingVoice ? 'recording' : ''}`}
-                  onClick={handleToggleVoiceRecord}
-                  title={isRecordingVoice ? t('releaseToSend') : t('holdToRecord')}
-                >
-                  <Mic size={20} />
-                </button>
-
-                <button
-                  type="submit"
-                  className="send-msg-btn"
-                  disabled={!inputText.trim()}
-                  title="Send message"
-                >
-                  <Send size={18} />
-                </button>
-              </form>
-            </>
-          ) : (
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '100%',
-                padding: '40px',
-                textAlign: 'center',
-                color: '#64748b',
-              }}
-            >
-              <div
-                style={{
-                  width: 80,
-                  height: 80,
-                  borderRadius: '50%',
-                  background: 'rgba(16, 185, 129, 0.1)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginBottom: 16,
-                }}
-              >
-                <Radio size={36} color="#10b981" />
+                <div className="wa-contact-header-text">
+                  <div className="wa-contact-header-name">{activeChatName}</div>
+                  <div className="wa-contact-header-status">online</div>
+                </div>
               </div>
-              <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#f8fafc', marginBottom: 8 }}>
-                {t('appTitle')}
-              </h2>
-              <p style={{ maxWidth: '420px', fontSize: '13px', lineHeight: 1.6, color: '#94a3b8' }}>
-                {t('tagline')} Select a conversation from the sidebar or click "Offline Connect" to link with a nearby device.
-              </p>
+
+              <div className="wa-chat-header-actions">
+                <button
+                  type="button"
+                  className="wa-icon-btn"
+                  onClick={handleStartCall}
+                  title="Voice Call"
+                >
+                  <Phone size={20} />
+                </button>
+                <button
+                  type="button"
+                  className="wa-icon-btn"
+                  title="Video Call"
+                >
+                  <Video size={21} />
+                </button>
+                <button
+                  type="button"
+                  className="wa-icon-btn"
+                  title="Search in chat"
+                >
+                  <Search size={20} />
+                </button>
+                <button
+                  type="button"
+                  className="wa-icon-btn"
+                  title="Menu"
+                >
+                  <MoreVertical size={20} />
+                </button>
+              </div>
             </div>
-          )}
-        </main>
-      </div>
+
+            {/* Messages Area */}
+            <div className="wa-messages-container">
+              {/* WhatsApp End-to-End Encryption Banner */}
+              <div className="wa-system-notice">
+                <Lock size={12} />
+                Messages and calls are end-to-end encrypted. No one outside of this chat can read or listen to them.
+              </div>
+
+              {messages.map((msg) => {
+                const isOutgoing = msg.senderId === profile?.id;
+
+                return (
+                  <div
+                    key={msg.id}
+                    className={`wa-message-row ${isOutgoing ? 'outgoing' : 'incoming'}`}
+                  >
+                    <div className={`wa-bubble ${isOutgoing ? 'outgoing' : 'incoming'}`}>
+                      {msg.type === 'text' && (
+                        <div className="wa-bubble-text">{msg.content}</div>
+                      )}
+
+                      {msg.type === 'voice' && (
+                        <VoiceBubble
+                          blobKey={msg.media?.blobKey}
+                          mediaUrl={msg.media?.url}
+                          durationSeconds={msg.media?.durationSeconds}
+                          waveform={msg.media?.waveform}
+                          isOutgoing={isOutgoing}
+                        />
+                      )}
+
+                      {msg.type === 'file' && (
+                        <div className="wa-file-bubble">
+                          <div className="wa-file-icon-box">
+                            <FileText size={20} />
+                          </div>
+                          <div>
+                            <div className="wa-file-name">{msg.media?.fileName || 'Document'}</div>
+                            <div className="wa-file-size">
+                              {msg.media?.fileSize
+                                ? `${Math.round(msg.media.fileSize / 1024)} KB`
+                                : 'Attachment'}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="wa-bubble-meta">
+                        <span className="wa-bubble-time">
+                          {new Date(msg.timestamp).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                        {isOutgoing && (
+                          <span>
+                            {msg.status === 'read' ? (
+                              <CheckCheck size={16} color="#53bdeb" />
+                            ) : msg.status === 'delivered' ? (
+                              <CheckCheck size={16} color="#8696a0" />
+                            ) : msg.status === 'sending' ? (
+                              <Clock size={12} color="#8696a0" />
+                            ) : (
+                              <Check size={16} color="#8696a0" />
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Bottom Message Input Bar */}
+            <form className="wa-input-bar" onSubmit={handleSendMessage}>
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                onChange={handleFileSelected}
+              />
+
+              <button type="button" className="wa-icon-btn" title="Emoji">
+                <Smile size={24} />
+              </button>
+
+              <button
+                type="button"
+                className="wa-icon-btn"
+                title="Attach"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Paperclip size={24} />
+              </button>
+
+              <input
+                type="text"
+                className="wa-message-input"
+                placeholder={isRecordingVoice ? `Recording voice (${recordingSeconds}s)...` : 'Type a message'}
+                value={inputText}
+                disabled={isRecordingVoice}
+                onChange={(e) => setInputText(e.target.value)}
+              />
+
+              {inputText.trim() ? (
+                <button type="submit" className="wa-send-btn" title="Send">
+                  <Send size={24} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={`wa-mic-btn ${isRecordingVoice ? 'recording' : ''}`}
+                  onClick={handleToggleVoiceRecord}
+                  title={isRecordingVoice ? 'Stop and send' : 'Voice message'}
+                >
+                  <Mic size={24} />
+                </button>
+              )}
+            </form>
+          </>
+        ) : (
+          /* ==========================================================================
+             WHATSAPP WEB WELCOME SCREEN (When no chat is selected)
+             ========================================================================== */
+          <div className="wa-welcome-screen">
+            <svg
+              viewBox="0 0 300 180"
+              className="wa-welcome-graphic"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <rect x="50" y="20" width="200" height="120" rx="12" fill="#202c33" />
+              <rect x="62" y="32" width="176" height="96" rx="6" fill="#111b21" />
+              <circle cx="150" cy="80" r="28" fill="#00a884" opacity="0.2" />
+              <path
+                d="M150 64c-8.8 0-16 7.2-16 16 0 2.8.7 5.5 2.1 7.9l-2.2 8.1 8.3-2.2c2.3 1.3 4.9 2.2 7.8 2.2 8.8 0 16-7.2 16-16s-7.2-16-16-16z"
+                fill="#00a884"
+              />
+              <rect x="30" y="142" width="240" height="8" rx="4" fill="#2a3942" />
+            </svg>
+
+            <h1 className="wa-welcome-title">WhatsApp Web</h1>
+            <p className="wa-welcome-desc">
+              Send and receive messages without keeping your phone online.<br />
+              Use WhatsApp on up to 4 linked devices and 1 phone at the same time.
+            </p>
+
+            <div className="wa-welcome-lock">
+              <Lock size={14} />
+              End-to-end encrypted
+            </div>
+          </div>
+        )}
+      </main>
     </div>
   );
 };

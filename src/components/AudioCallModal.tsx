@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, ShieldCheck, Zap } from 'lucide-react';
+import React, { useState } from 'react';
+import { Phone, PhoneOff, Mic, MicOff, Volume2 } from 'lucide-react';
 import { CallManager } from '../services/call/callManager';
 import type { ActiveCallSession } from '../services/call/callManager';
-import { t } from '../i18n/translations';
 
 interface AudioCallModalProps {
   session: ActiveCallSession;
@@ -10,20 +9,10 @@ interface AudioCallModalProps {
 }
 
 export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUserId }) => {
-  const [audioLevel, setAudioLevel] = useState(0);
   const [isMuted, setIsMuted] = useState(session.isMuted);
+  const [isSpeaker, setIsSpeaker] = useState(false);
 
   const callManager = CallManager.getInstance();
-
-  useEffect(() => {
-    callManager.onAudioLevel = (level) => {
-      setAudioLevel(level);
-    };
-
-    return () => {
-      callManager.onAudioLevel = undefined;
-    };
-  }, [callManager]);
 
   const handleToggleMute = () => {
     const muted = callManager.toggleMute();
@@ -51,90 +40,64 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUs
   const isIncomingRinging = session.direction === 'incoming' && session.state === 'ringing';
 
   return (
-    <div className="call-modal-overlay">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span
-          className={`transport-badge ${session.transport}`}
-          style={{ fontSize: '12px', padding: '4px 12px', borderRadius: '16px' }}
-        >
-          <Zap size={14} />
-          {session.transport === 'direct_webrtc_lan'
-            ? t('transport_direct')
-            : t('transport_cloud')}
-        </span>
-        <span
-          style={{
-            fontSize: '11px',
-            color: '#10b981',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
-        >
-          <ShieldCheck size={14} /> E2EE Verified
-        </span>
+    <div className="wa-call-overlay">
+      <div style={{ fontSize: '13px', color: '#8696a0', letterSpacing: '0.5px' }}>
+        WhatsApp Voice Call
       </div>
 
-      <div className="call-peer-info">
-        <div className="call-avatar-large">
+      <div className="wa-call-peer-container">
+        <div className="wa-call-avatar-large">
           {session.peerName.charAt(0).toUpperCase()}
         </div>
-        <div className="call-peer-name">{session.peerName}</div>
+        <div className="wa-call-peer-name">{session.peerName}</div>
         {session.peerPhone && (
-          <div style={{ color: '#94a3b8', fontSize: '14px' }}>{session.peerPhone}</div>
+          <div style={{ color: '#8696a0', fontSize: '14px' }}>{session.peerPhone}</div>
         )}
 
-        <div className="call-state-text">
-          {session.state === 'calling' && t('outgoingCall')}
-          {session.state === 'ringing' && t('incomingCall')}
-          {session.state === 'connected' && (
-            <span>
-              {t('callConnected')} • {formatDuration(session.durationSeconds)}
-            </span>
-          )}
+        <div className="wa-call-status-text">
+          {session.state === 'calling' && 'Calling...'}
+          {session.state === 'ringing' && 'Incoming Call...'}
+          {session.state === 'connected' && formatDuration(session.durationSeconds)}
         </div>
-
-        {session.state === 'connected' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <span style={{ fontSize: '11px', color: '#64748b' }}>{t('liveAudioMeter')}</span>
-            <div className="call-audio-meter-bar">
-              <div
-                className="call-audio-meter-fill"
-                style={{ width: `${Math.max(5, audioLevel)}%` }}
-              />
-            </div>
-          </div>
-        )}
       </div>
 
-      <div className="call-controls-row">
+      <div className="wa-call-controls">
         {isIncomingRinging ? (
           <>
             <button
               type="button"
-              className="call-round-btn end"
+              className="wa-call-circle-btn end"
               onClick={handleReject}
-              title={t('declineCall')}
+              title="Decline"
             >
-              <PhoneOff size={28} />
+              <PhoneOff size={26} />
             </button>
             <button
               type="button"
-              className="call-round-btn accept"
+              className="wa-call-circle-btn accept"
               onClick={handleAccept}
-              title={t('acceptCall')}
+              title="Accept"
             >
-              <Phone size={28} />
+              <Phone size={26} />
             </button>
           </>
         ) : (
           <>
+            <button
+              type="button"
+              className={`wa-call-circle-btn mute ${isSpeaker ? 'active' : ''}`}
+              onClick={() => setIsSpeaker(!isSpeaker)}
+              title="Speaker"
+            >
+              <Volume2 size={24} />
+            </button>
+
             {session.state === 'connected' && (
               <button
                 type="button"
-                className={`call-round-btn mute ${isMuted ? 'active' : ''}`}
+                className={`wa-call-circle-btn mute ${isMuted ? 'active' : ''}`}
                 onClick={handleToggleMute}
-                title={isMuted ? t('unmute') : t('mute')}
+                title={isMuted ? 'Unmute' : 'Mute'}
               >
                 {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
               </button>
@@ -142,11 +105,11 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({ session, localUs
 
             <button
               type="button"
-              className="call-round-btn end"
+              className="wa-call-circle-btn end"
               onClick={handleEndCall}
-              title={t('endCall')}
+              title="End call"
             >
-              <PhoneOff size={28} />
+              <PhoneOff size={26} />
             </button>
           </>
         )}
