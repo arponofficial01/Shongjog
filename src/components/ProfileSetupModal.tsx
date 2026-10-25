@@ -10,6 +10,8 @@ import {
   AlertCircle,
   RefreshCw,
   User,
+  Camera,
+  FileText,
 } from 'lucide-react';
 import { IdentityService } from '../services/identity/identityService';
 import { AuthService } from '../services/auth/authService';
@@ -36,10 +38,13 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
   const [canResend, setCanResend] = useState(false);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Step 3: Profile Setup
+  // Step 3: Profile Setup (Name, Username, Avatar, Description/Bio)
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
+  const [avatarUrl, setAvatarUrl] = useState<string>('');
+  const [bio, setBio] = useState<string>('Available on Shongjog direct network');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Shared
   const [error, setError] = useState('');
@@ -99,13 +104,31 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
     return () => clearTimeout(timer);
   }, [username]);
 
+  // Avatar file upload handler
+  const handleAvatarSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Profile picture must be under 2MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAvatarUrl(reader.result as string);
+      setError('');
+    };
+    reader.readAsDataURL(file);
+  };
+
   // --- Step 1: Send OTP ---
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
     if (!navigator.onLine) {
-      setError('You must be connected to the internet to verify your phone number.');
+      setError('Active internet connection required for real-time mobile verification.');
       return;
     }
 
@@ -179,10 +202,10 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       const res = await AuthService.verifyOtp(formattedPhone, fullCode);
       if (res.verified) {
         if (res.existingProfile) {
-          // Returning citizen: automatically signed in!
+          // Returning user: automatically restored and signed in!
           onProfileCreated(res.existingProfile);
         } else {
-          // New citizen: proceed to name and username step
+          // New citizen: proceed to name, avatar, username, and description step
           setStep('profile');
         }
       }
@@ -210,7 +233,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
     }
   };
 
-  // --- Step 3: Complete Profile ---
+  // --- Step 3: Complete Profile & Sync to Supabase ---
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -236,11 +259,13 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       const profile = await IdentityService.setupProfile(
         formattedPhone,
         cleanUsername,
-        displayName.trim()
+        displayName.trim(),
+        avatarUrl || undefined,
+        bio.trim() || undefined
       );
       onProfileCreated(profile);
     } catch (err: any) {
-      setError(err.message || 'Failed to complete profile creation');
+      setError(err.message || 'Failed to complete profile synchronization');
     } finally {
       setIsLoading(false);
     }
@@ -263,12 +288,12 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       <div
         style={{
           width: '100%',
-          maxWidth: '480px',
-          background: 'rgba(12, 19, 32, 0.92)',
+          maxWidth: '490px',
+          background: 'rgba(12, 19, 32, 0.94)',
           border: '1px solid var(--border-glass-bright)',
           borderRadius: '26px',
-          padding: '38px 34px',
-          boxShadow: '0 28px 70px rgba(0, 0, 0, 0.8), 0 0 35px var(--accent-glow)',
+          padding: '36px 32px',
+          boxShadow: '0 28px 70px rgba(0, 0, 0, 0.85), 0 0 35px var(--accent-glow)',
           textAlign: 'center',
           animation: 'call-fade 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
           position: 'relative',
@@ -277,11 +302,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         {/* Header Icon */}
         <div
           style={{
-            width: 72,
-            height: 72,
-            borderRadius: '22px',
+            width: 68,
+            height: 68,
+            borderRadius: '20px',
             background: 'linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%)',
-            margin: '0 auto 18px',
+            margin: '0 auto 16px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -289,15 +314,15 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
             boxShadow: '0 8px 30px rgba(16, 185, 129, 0.45)',
           }}
         >
-          {step === 'phone' && <Phone size={34} />}
-          {step === 'otp' && <KeyRound size={34} />}
-          {step === 'profile' && <User size={34} />}
+          {step === 'phone' && <Phone size={32} />}
+          {step === 'otp' && <KeyRound size={32} />}
+          {step === 'profile' && <User size={32} />}
         </div>
 
         <h1
           style={{
             fontFamily: 'var(--font-display)',
-            fontSize: '26px',
+            fontSize: '25px',
             fontWeight: 700,
             color: '#ffffff',
             letterSpacing: '-0.5px',
@@ -307,10 +332,10 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
           Shongjog <span style={{ fontFamily: 'var(--font-bangla)', color: 'var(--accent-light)', fontSize: '20px' }}>সংযোগ</span>
         </h1>
 
-        <p style={{ fontSize: '13px', color: '#94a3b8', lineHeight: 1.5, marginBottom: 22 }}>
+        <p style={{ fontSize: '13px', color: '#94a3b8', lineHeight: 1.5, marginBottom: 20 }}>
           {step === 'phone' && 'National Secure Communication Network. Enter your Bangladeshi mobile number.'}
           {step === 'otp' && `Enter the 6-digit verification code sent to ${formattedPhone}`}
-          {step === 'profile' && 'Choose your unique cryptographic handle and display name.'}
+          {step === 'profile' && 'Set up your citizen profile picture, username, and description.'}
         </p>
 
         {/* Global Error Banner */}
@@ -323,7 +348,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               borderRadius: '10px',
               color: '#fda4af',
               fontSize: '13px',
-              marginBottom: 18,
+              marginBottom: 16,
               textAlign: 'left',
               display: 'flex',
               alignItems: 'center',
@@ -336,7 +361,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         )}
 
         {/* =========================================================================
-            STEP 1: PHONE NUMBER INPUT
+            STEP 1: PHONE NUMBER INPUT (FIXED INTEGRATED LAYOUT - ZERO OVERLAP)
             ========================================================================= */}
         {step === 'phone' && (
           <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left' }}>
@@ -362,22 +387,59 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                 )}
               </div>
 
-              <div className="input-prefix-wrapper">
-                <span className="input-prefix-symbol" style={{ fontSize: '14px', color: 'var(--accent-light)', fontWeight: 600 }}>
-                  🇧🇩 +880
-                </span>
+              {/* Integrated Unbreakable Phone Input Box */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  background: 'var(--bg-input)',
+                  border: '1.5px solid var(--border-glass)',
+                  borderRadius: 'var(--radius-sm)',
+                  overflow: 'hidden',
+                  transition: 'border-color 0.2s ease',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '12px 14px',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRight: '1px solid var(--border-glass)',
+                    color: 'var(--accent-light)',
+                    fontWeight: 700,
+                    fontSize: '14px',
+                    userSelect: 'none',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{ fontSize: '16px' }}>🇧🇩</span>
+                  <span>+880</span>
+                </div>
+
                 <input
                   type="tel"
                   placeholder="01712 345678"
                   value={phoneInput}
                   onChange={(e) => setPhoneInput(e.target.value)}
-                  className="lux-form-input"
-                  style={{ paddingLeft: '80px', fontSize: '15px', letterSpacing: '0.5px' }}
+                  style={{
+                    flex: 1,
+                    background: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    padding: '12px 14px',
+                    fontSize: '15px',
+                    color: 'var(--text-pure)',
+                    letterSpacing: '0.5px',
+                    minWidth: 0,
+                  }}
                   required
                   autoFocus
                 />
               </div>
-              <div style={{ fontSize: '11px', color: '#64748b', marginTop: 4 }}>
+
+              <div style={{ fontSize: '11px', color: '#64748b', marginTop: 5 }}>
                 Supports GP (017/013), Robi (018), Banglalink (019/014), Airtel (016), Teletalk (015).
               </div>
             </div>
@@ -405,7 +467,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
             ========================================================================= */}
         {step === 'otp' && (
           <div style={{ textAlign: 'center' }}>
-            {/* Live OTP Notification Banner */}
+            {/* Live Security Notification Banner */}
             {devOtpNotification && (
               <div
                 style={{
@@ -424,7 +486,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               >
                 <div>
                   <span style={{ color: '#94a3b8' }}>Security Code: </span>
-                  <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '15px', color: 'var(--accent-light)' }}>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '16px', color: 'var(--accent-light)' }}>
                     {devOtpNotification}
                   </span>
                 </div>
@@ -435,11 +497,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                     triggerVerifyOtp(devOtpNotification);
                   }}
                   style={{
-                    padding: '4px 10px',
+                    padding: '5px 12px',
                     borderRadius: '6px',
                     background: 'var(--accent-main)',
                     color: '#05080d',
-                    fontSize: '11px',
+                    fontSize: '11.5px',
                     fontWeight: 700,
                     border: 'none',
                     cursor: 'pointer',
@@ -450,7 +512,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               </div>
             )}
 
-            {/* 6-Digit Individual Input Boxes */}
+            {/* 6-Digit Individual Boxes */}
             <div
               style={{
                 display: 'flex',
@@ -551,12 +613,93 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         )}
 
         {/* =========================================================================
-            STEP 3: PROFILE IDENTITY REGISTRATION (FOR NEW CITIZENS)
+            STEP 3: PROFILE IDENTITY & DESCRIPTION (SYNCED TO SUPABASE)
             ========================================================================= */}
         {step === 'profile' && (
-          <form onSubmit={handleProfileSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left' }}>
+          <form onSubmit={handleProfileSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14, textAlign: 'left' }}>
+            {/* Profile Picture Upload & Preview */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 4 }}>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={handleAvatarSelected}
+              />
+              
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: '18px',
+                  background: avatarUrl ? `url(${avatarUrl}) center/cover no-repeat` : 'var(--brand-orb-grad)',
+                  border: '2px solid var(--accent-light)',
+                  boxShadow: '0 4px 18px var(--accent-glow)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: '26px',
+                  fontWeight: 700,
+                  position: 'relative',
+                  flexShrink: 0,
+                }}
+                title="Click to change photo"
+              >
+                {!avatarUrl && (displayName ? displayName.charAt(0).toUpperCase() : <User size={30} />)}
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: -3,
+                    right: -3,
+                    width: 24,
+                    height: 24,
+                    borderRadius: '50%',
+                    background: 'var(--accent-main)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#05080d',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                  }}
+                >
+                  <Camera size={13} />
+                </div>
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '8px',
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid var(--border-glass)',
+                    color: '#f8fafc',
+                    fontSize: '12.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    marginBottom: 4,
+                  }}
+                >
+                  <Camera size={14} color="var(--accent-light)" />
+                  <span>{avatarUrl ? 'Change Photo' : 'Upload Photo'}</span>
+                </button>
+                <div style={{ fontSize: '11px', color: '#64748b' }}>
+                  PNG, JPG or WebP (under 2MB)
+                </div>
+              </div>
+            </div>
+
+            {/* Full Name */}
             <div>
-              <label style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--accent-light)', display: 'block', marginBottom: 6, letterSpacing: '0.4px' }}>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', display: 'block', marginBottom: 5, letterSpacing: '0.4px' }}>
                 FULL NAME
               </label>
               <input
@@ -570,13 +713,14 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               />
             </div>
 
+            {/* Username */}
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <label style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--accent-light)', letterSpacing: '0.4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+                <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', letterSpacing: '0.4px' }}>
                   UNIQUE USERNAME (@HANDLE)
                 </label>
                 {usernameStatus === 'checking' && (
-                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>Checking availability...</span>
+                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>Checking Supabase...</span>
                 )}
                 {usernameStatus === 'available' && (
                   <span style={{ fontSize: '11px', color: 'var(--accent-light)', fontWeight: 600 }}>✓ Available</span>
@@ -599,8 +743,24 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                   required
                 />
               </div>
-              <div style={{ fontSize: '11px', color: '#64748b', marginTop: 4 }}>
-                This is your cryptographic address across the Shongjog network.
+            </div>
+
+            {/* Description / Bio */}
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', display: 'block', marginBottom: 5, letterSpacing: '0.4px' }}>
+                PROFILE DESCRIPTION / ABOUT
+              </label>
+              <div className="input-prefix-wrapper">
+                <span className="input-prefix-symbol">
+                  <FileText size={16} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="e.g. Available on Shongjog direct network"
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  className="lux-form-input has-prefix"
+                />
               </div>
             </div>
 
@@ -616,7 +776,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                 gap: 8,
               }}
             >
-              <span>{isLoading ? 'Generating Hardware Keys...' : 'Launch Encrypted Shongjog'}</span>
+              <span>{isLoading ? 'Syncing to Supabase Cloud...' : 'Complete Profile & Launch'}</span>
               <ArrowRight size={18} />
             </button>
           </form>
@@ -625,7 +785,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         {/* Security Footer */}
         <div
           style={{
-            marginTop: 24,
+            marginTop: 20,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -635,7 +795,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
           }}
         >
           <ShieldCheck size={14} color="var(--accent-light)" />
-          Hardware ECDSA P-256 air-gapped cryptographic keys
+          Hardware ECDSA P-256 cryptographic keys • Synced to Supabase
         </div>
       </div>
     </div>

@@ -11,6 +11,7 @@ export interface UserProfile {
   username: string;
   displayName: string;
   avatarUrl?: string;
+  bio?: string;
   publicKey?: string;
   deviceId: string;
   createdAt: number;
@@ -23,6 +24,7 @@ export interface Contact {
   username: string;
   displayName: string;
   avatarUrl?: string;
+  bio?: string;
   publicKey?: string;
   deviceId?: string;
   isBlocked: boolean;

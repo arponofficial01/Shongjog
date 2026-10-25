@@ -79,7 +79,8 @@ export class IdentityService {
     phoneNumber: string,
     username: string,
     displayName: string,
-    avatarUrl?: string
+    avatarUrl?: string,
+    bio?: string
   ): Promise<UserProfile> {
     const phoneVal = this.validateBangladeshPhone(phoneNumber);
     if (!phoneVal.isValid) throw new Error(phoneVal.error);
@@ -101,7 +102,8 @@ export class IdentityService {
       phoneNumber: phoneVal.formatted,
       username: userVal.formatted,
       displayName: displayName.trim(),
-      avatarUrl,
+      avatarUrl: avatarUrl || existing?.avatarUrl,
+      bio: bio ? bio.trim() : (existing?.bio || 'Available on Shongjog direct network'),
       publicKey: publicKeyBase64,
       deviceId,
       createdAt: existing ? existing.createdAt : now,
@@ -116,18 +118,34 @@ export class IdentityService {
     if (navigator.onLine && isConfigured) {
       try {
         const supabase = getSupabase();
-        await supabase.from('profiles').upsert({
+        const payload: any = {
           id: profile.id,
           phone_number: profile.phoneNumber,
           username: profile.username,
           display_name: profile.displayName,
           avatar_url: profile.avatarUrl,
+          bio: profile.bio,
           public_key: profile.publicKey,
           device_id: profile.deviceId,
           updated_at: new Date().toISOString(),
-        });
+        };
+
+        const { error } = await supabase.from('profiles').upsert(payload);
+        if (error) {
+          // If schema in Supabase doesn't have bio or avatar_url columns yet, fall back without them
+          console.warn('Upsert notice, falling back to core columns:', error.message);
+          await supabase.from('profiles').upsert({
+            id: profile.id,
+            phone_number: profile.phoneNumber,
+            username: profile.username,
+            display_name: profile.displayName,
+            public_key: profile.publicKey,
+            device_id: profile.deviceId,
+            updated_at: new Date().toISOString(),
+          });
+        }
       } catch (err) {
-        console.warn('Supabase remote profile sync queued for later', err);
+        console.warn('Supabase remote profile sync notice:', err);
       }
     }
 

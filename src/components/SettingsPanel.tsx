@@ -245,9 +245,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 fontWeight: 700,
                 boxShadow: '0 8px 24px var(--accent-glow)',
                 flexShrink: 0,
+                overflow: 'hidden',
               }}
             >
-              {profile.displayName.charAt(0).toUpperCase()}
+              {profile.avatarUrl ? (
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.displayName}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                profile.displayName.charAt(0).toUpperCase()
+              )}
             </div>
 
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -271,6 +280,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <AtSign size={11} />
                 {profile.username}
               </div>
+              {profile.bio && (
+                <div style={{ fontSize: '12px', color: '#cbd5e1', fontStyle: 'italic', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  "{profile.bio}"
+                </div>
+              )}
               <div style={{ fontSize: '11.5px', color: '#94a3b8' }}>
                 {profile.phoneNumber || 'P2P Identity Active'}
               </div>
@@ -477,9 +491,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 fontWeight: 700,
                 boxShadow: '0 8px 30px var(--accent-glow)',
                 margin: '0 auto 14px',
+                overflow: 'hidden',
               }}
             >
-              {profile.displayName.charAt(0).toUpperCase()}
+              {profile.avatarUrl ? (
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.displayName}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                profile.displayName.charAt(0).toUpperCase()
+              )}
             </div>
 
             <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#f8fafc', margin: '0 0 4px 0' }}>
@@ -503,6 +526,23 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <AtSign size={13} />
               {profile.username}
             </div>
+
+            {profile.bio && (
+              <div
+                style={{
+                  fontSize: '13px',
+                  color: '#e2e8f0',
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  padding: '8px 14px',
+                  borderRadius: '8px',
+                  margin: '6px 0 10px',
+                  fontStyle: 'italic',
+                  border: '1px solid rgba(255, 255, 255, 0.06)',
+                }}
+              >
+                "{profile.bio}"
+              </div>
+            )}
 
             <div style={{ fontSize: '13px', color: '#94a3b8' }}>
               {profile.phoneNumber || 'Direct Peer Node'}

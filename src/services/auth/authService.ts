@@ -150,6 +150,7 @@ export class AuthService {
             username: data.username,
             displayName: data.display_name,
             avatarUrl: data.avatar_url,
+            bio: data.bio || 'Available on Shongjog direct network',
             publicKey: data.public_key,
             deviceId: data.device_id,
             createdAt: new Date(data.created_at).getTime(),

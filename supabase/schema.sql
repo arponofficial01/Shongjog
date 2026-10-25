@@ -12,11 +12,17 @@ create table if not exists public.profiles (
   phone_number text not null,
   username text unique not null,
   display_name text not null,
+  avatar_url text,
+  bio text default 'Available on Shongjog direct network',
   device_id text not null,
   public_key text not null,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+-- Migration safety for existing deployments:
+alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists bio text default 'Available on Shongjog direct network';
 
 -- 3. Messages Table (Idempotent Storage & Cloud Sync)
 create table if not exists public.messages (
@@ -82,5 +88,13 @@ create policy "Allow public insert messages" on public.messages for insert with 
 create policy "Allow public select conversations" on public.conversations for select using (true);
 create policy "Allow public upsert conversations" on public.conversations for all using (true);
 
--- 7. Add Messages Table to Supabase Realtime Publication
-alter publication supabase_realtime add table public.messages;
+-- 7. Add Tables to Supabase Realtime Publication
+do $$
+begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'messages') then
+    alter publication supabase_realtime add table public.messages;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'profiles') then
+    alter publication supabase_realtime add table public.profiles;
+  end if;
+end $$;

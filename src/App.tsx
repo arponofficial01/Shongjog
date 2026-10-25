@@ -912,8 +912,16 @@ export const App: React.FC = () => {
                     loadMessages(conv.id);
                   }}
                 >
-                  <div className="chat-avatar-squircle online">
-                    {name.charAt(0).toUpperCase()}
+                  <div className="chat-avatar-squircle online" style={{ overflow: 'hidden' }}>
+                    {contact?.avatarUrl ? (
+                      <img
+                        src={contact.avatarUrl}
+                        alt={name}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      name.charAt(0).toUpperCase()
+                    )}
                   </div>
 
                   <div className="chat-card-body">
@@ -1083,8 +1091,16 @@ export const App: React.FC = () => {
                   <ArrowLeft size={20} />
                 </button>
 
-                <div className="peer-avatar-squircle">
-                  {activeChatName.charAt(0).toUpperCase()}
+                <div className="peer-avatar-squircle" style={{ overflow: 'hidden' }}>
+                  {activeContact?.avatarUrl ? (
+                    <img
+                      src={activeContact.avatarUrl}
+                      alt={activeChatName}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    activeChatName.charAt(0).toUpperCase()
+                  )}
                 </div>
 
                 <div>
@@ -1525,9 +1541,18 @@ export const App: React.FC = () => {
                         fontWeight: 700,
                         margin: '0 auto 12px',
                         boxShadow: '0 8px 24px var(--accent-glow)',
+                        overflow: 'hidden',
                       }}
                     >
-                      {activeChatName.charAt(0).toUpperCase()}
+                      {activeContact?.avatarUrl ? (
+                        <img
+                          src={activeContact.avatarUrl}
+                          alt={activeChatName}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      ) : (
+                        activeChatName.charAt(0).toUpperCase()
+                      )}
                     </div>
                     <div style={{ fontSize: '18px', fontWeight: 600, color: 'white' }}>
                       {activeChatName}
@@ -1535,6 +1560,22 @@ export const App: React.FC = () => {
                     {activeContact?.username && (
                       <div style={{ fontSize: '13px', color: 'var(--accent-light)', marginTop: 2 }}>
                         @{activeContact.username}
+                      </div>
+                    )}
+                    {activeContact?.bio && (
+                      <div
+                        style={{
+                          fontSize: '12.5px',
+                          color: '#e2e8f0',
+                          background: 'rgba(255, 255, 255, 0.05)',
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          margin: '8px 0 4px',
+                          fontStyle: 'italic',
+                          border: '1px solid rgba(255, 255, 255, 0.06)',
+                        }}
+                      >
+                        "{activeContact.bio}"
                       </div>
                     )}
                     <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: 4 }}>
