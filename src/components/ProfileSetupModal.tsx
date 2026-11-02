@@ -176,6 +176,57 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
     }
   }, [phoneInput]);
 
+  // Auto-detect Supabase session from magic link redirect or email auth token
+  useEffect(() => {
+    const supabase = getSupabase();
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session && session.user && (event === 'SIGNED_IN' || event === 'USER_UPDATED')) {
+        const email = session.user.email?.toLowerCase();
+        if (email) {
+          try {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('*')
+              .or(`email.eq.${email},bio.ilike.%__email:${email}%`)
+              .maybeSingle();
+
+            if (prof) {
+              const matchedProfile: UserProfile = {
+                id: prof.id,
+                displayName: prof.display_name || 'Citizen',
+                username: prof.username || '',
+                phoneNumber: prof.phone_number || '',
+                avatarUrl: prof.avatar_url,
+                publicKey: prof.public_key,
+                email: email,
+                bio: prof.bio,
+                createdAt: prof.created_at ? new Date(prof.created_at).getTime() : Date.now(),
+                recoveryPinHash: prof.recovery_pin_hash || undefined,
+                passwordHash: prof.password_hash || undefined,
+                deviceId: prof.device_id || 'web_' + Math.random().toString(36).substring(2, 10),
+                updatedAt: prof.updated_at ? new Date(prof.updated_at).getTime() : Date.now(),
+              };
+              const db = await getDatabase();
+              await db.put('profiles', matchedProfile);
+              IdentityService.activateSession(matchedProfile.id);
+              DeviceSessionService.registerSession(matchedProfile).catch(console.warn);
+              AccountSyncService.syncAllFromCloud(matchedProfile).catch(console.warn);
+              onProfileCreated(matchedProfile);
+            } else {
+              setStep('profile');
+            }
+          } catch (e) {
+            console.warn('Session auto-login error:', e);
+          }
+        }
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [onProfileCreated]);
+
   // Resend countdown timer
   useEffect(() => {
     let timer: any;
