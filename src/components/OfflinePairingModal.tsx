@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
-import { Copy, Check, Link2, WifiOff, ShieldCheck } from 'lucide-react';
+import { Copy, Check, Link2, WifiOff, ShieldCheck, QrCode, FileText, X } from 'lucide-react';
+import QRCode from 'qrcode';
 import { OfflinePairing } from '../services/transport/offlinePairing';
 import { TransportManager } from '../services/transport/transportManager';
+import { WebRTCService } from '../services/transport/webrtcService';
+import { getDatabase } from '../services/db/database';
 import { t } from '../i18n/translations';
 
 interface OfflinePairingModalProps {
@@ -18,10 +21,13 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
   onConnectedPeer,
 }) => {
   const [activeTab, setActiveTab] = useState<'createOffer' | 'answerOffer'>('createOffer');
-  
+  const [viewFormat, setViewFormat] = useState<'qr' | 'code'>('qr');
+
   // Offerer state
   const [generatedOfferCode, setGeneratedOfferCode] = useState('');
+  const [offerQrUrl, setOfferQrUrl] = useState('');
   const [offererPc, setOffererPc] = useState<RTCPeerConnection | null>(null);
+  const [offererDc, setOffererDc] = useState<RTCDataChannel | null>(null);
   const [answerInputCode, setAnswerInputCode] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -29,6 +35,7 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
   // Callee / Answerer state
   const [offerInputCode, setOfferInputCode] = useState('');
   const [generatedAnswerCode, setGeneratedAnswerCode] = useState('');
+  const [answerQrUrl, setAnswerQrUrl] = useState('');
   const [isAnswerCopied, setIsAnswerCopied] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -44,16 +51,23 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
       );
 
       setOffererPc(pc);
+      setOffererDc(dc);
       setGeneratedOfferCode(pairingCode);
 
+      QRCode.toDataURL(pairingCode, {
+        width: 240,
+        margin: 2,
+        color: { dark: '#041019', light: '#ffffff' },
+      })
+        .then((url) => setOfferQrUrl(url))
+        .catch(() => {});
+
       // Listen for data channel connection
-      dc.onopen = () => {
+      dc.onopen = async () => {
         setStatusMessage('Direct Peer Connection Established!');
-        TransportManager.registerPeerConnected('peer_direct_lan');
-        onConnectedPeer('peer_direct_lan', 'Offline Peer');
       };
 
-      setStatusMessage('Offer ready! Copy and share this code with peer device.');
+      setStatusMessage('Offer ready! Scan the QR code or copy the code to peer device.');
     } catch (err: any) {
       setStatusMessage('Failed to generate offer: ' + err.message);
     } finally {
@@ -66,8 +80,38 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
     if (!offererPc || !answerInputCode.trim()) return;
     try {
       setStatusMessage('Applying peer answer...');
-      await OfflinePairing.applyDirectAnswer(offererPc, answerInputCode.trim());
-      setStatusMessage('Pairing handshake complete! Testing direct P2P data flow...');
+      const answerPayload = await OfflinePairing.applyDirectAnswer(offererPc, answerInputCode.trim());
+      const peerId = answerPayload.senderId;
+      const peerName = answerPayload.senderName || 'Offline Peer';
+
+      if (offererPc && offererDc) {
+        WebRTCService.getInstance(localUserId, peerId).adoptConnection(offererPc, offererDc);
+      }
+
+      TransportManager.registerPeerConnected(peerId);
+
+      // Auto-save contact to IndexedDB address book
+      try {
+        const db = await getDatabase();
+        const existing = await db.get('contacts', peerId);
+        if (!existing) {
+          await db.put('contacts', {
+            id: peerId,
+            phoneNumber: 'Offline Direct Peer',
+            displayName: peerName,
+            username: peerName.toLowerCase().replace(/\s+/g, '_'),
+            isBlocked: false,
+            isOnlineDirect: true,
+            lastSeen: Date.now(),
+          });
+        }
+      } catch (e) {
+        console.warn('Could not auto-save contact:', e);
+      }
+
+      setStatusMessage(`Pairing complete! Connected directly with ${peerName}`);
+      onConnectedPeer(peerId, peerName);
+      setTimeout(() => onClose(), 1200);
     } catch (err: any) {
       setStatusMessage('Error applying answer: ' + err.message);
     }
@@ -79,20 +123,51 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
     setIsGenerating(true);
     try {
       setStatusMessage('Processing offer and generating answer...');
-      const { answerCode, onDataChannel } = await OfflinePairing.generateDirectAnswer(
+      const { pc, answerCode, offerPayload, onDataChannel } = await OfflinePairing.generateDirectAnswer(
         offerInputCode.trim(),
         localUserId,
         localUserName,
         true
       );
 
+      const peerId = offerPayload.senderId;
+      const peerName = offerPayload.senderName || 'Offline Peer';
+
       setGeneratedAnswerCode(answerCode);
+      QRCode.toDataURL(answerCode, {
+        width: 240,
+        margin: 2,
+        color: { dark: '#041019', light: '#ffffff' },
+      })
+        .then((url) => setAnswerQrUrl(url))
+        .catch(() => {});
 
       onDataChannel((channel) => {
-        channel.onopen = () => {
-          setStatusMessage('Direct Peer Connection Established!');
-          TransportManager.registerPeerConnected('peer_direct_lan');
-          onConnectedPeer('peer_direct_lan', 'Offline Peer');
+        channel.onopen = async () => {
+          setStatusMessage(`Direct Peer Connection Established with ${peerName}!`);
+          WebRTCService.getInstance(localUserId, peerId).adoptConnection(pc, channel);
+          TransportManager.registerPeerConnected(peerId);
+
+          try {
+            const db = await getDatabase();
+            const existing = await db.get('contacts', peerId);
+            if (!existing) {
+              await db.put('contacts', {
+                id: peerId,
+                phoneNumber: 'Offline Direct Peer',
+                displayName: peerName,
+                username: peerName.toLowerCase().replace(/\s+/g, '_'),
+                isBlocked: false,
+                isOnlineDirect: true,
+                lastSeen: Date.now(),
+              });
+            }
+          } catch (e) {
+            console.warn('Could not auto-save contact:', e);
+          }
+
+          onConnectedPeer(peerId, peerName);
+          setTimeout(() => onClose(), 1200);
         };
       });
 
@@ -116,134 +191,123 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: 'rgba(5, 8, 15, 0.85)',
-        backdropFilter: 'blur(16px)',
-        zIndex: 90,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '20px',
-      }}
-    >
+    <div className="custom-modal-backdrop offline-pairing-backdrop" onClick={onClose}>
       <div
-        className="pairing-panel"
-        style={{
-          backgroundColor: '#0c1220',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--radius-lg)',
-          width: '100%',
-          maxHeight: '90vh',
-          overflowY: 'auto',
-          boxShadow: 'var(--shadow-card)',
-        }}
+        className="offline-pairing-card"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div>
-            <h2 style={{ fontSize: '18px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <WifiOff size={20} color="#10b981" />
-              {t('offlineConnectTitle')}
-            </h2>
-            <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: 4 }}>
-              {t('offlineConnectDesc')}
-            </p>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div className="offline-header-icon-box">
+              <WifiOff size={22} />
+            </div>
+            <div>
+              <h2 className="offline-modal-title">
+                {t('offlinePairing')}
+              </h2>
+              <span className="offline-modal-subtitle">
+                Zero-Internet Direct WebRTC Device Pairing
+              </span>
+            </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            style={{
-              padding: '6px 12px',
-              borderRadius: 'var(--radius-sm)',
-              background: 'rgba(255,255,255,0.08)',
-              fontSize: '13px',
-            }}
+            aria-label="Close"
+            className="offline-modal-close-btn"
           >
-            ✕
+            <X size={17} />
           </button>
         </div>
 
-        {/* Tab switcher */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {/* Security Badge */}
+        <div className="offline-security-badge">
+          <ShieldCheck size={18} style={{ flexShrink: 0 }} />
+          <span>Direct point-to-point connection over local Wi-Fi, hotspot, or Bluetooth tethering.</span>
+        </div>
+
+        {/* Mode Selector Tabs */}
+        <div className="offline-tab-track">
           <button
             type="button"
-            className={`tab-btn ${activeTab === 'createOffer' ? 'active' : ''}`}
             onClick={() => setActiveTab('createOffer')}
+            className={`offline-tab-btn ${activeTab === 'createOffer' ? 'active' : ''}`}
           >
-            Device 1: Initiate (Offer)
+            Device 1 (Host Offer)
           </button>
           <button
             type="button"
-            className={`tab-btn ${activeTab === 'answerOffer' ? 'active' : ''}`}
             onClick={() => setActiveTab('answerOffer')}
+            className={`offline-tab-btn ${activeTab === 'answerOffer' ? 'active' : ''}`}
           >
-            Device 2: Join (Answer)
+            Device 2 (Join / Answer)
           </button>
         </div>
 
         {statusMessage && (
-          <div
-            style={{
-              padding: '10px 14px',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'rgba(16, 185, 129, 0.1)',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              color: '#34d399',
-              fontSize: '12px',
-              marginBottom: 16,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <ShieldCheck size={16} />
+          <div className="offline-status-banner">
             {statusMessage}
           </div>
         )}
 
+        {/* Tab 1: Device 1 (Offerer) */}
         {activeTab === 'createOffer' ? (
           <div>
-            <div className="pairing-step-box">
-              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 8 }}>
+            <div className="offline-step-card">
+              <h3 className="offline-step-title">
                 {t('myPairingOffer')}
               </h3>
+
               {!generatedOfferCode ? (
                 <button
                   type="button"
                   onClick={handleGenerateOffer}
                   disabled={isGenerating}
-                  style={{
-                    padding: '10px 18px',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--emerald-primary)',
-                    color: 'white',
-                    fontWeight: 600,
-                    fontSize: '13px',
-                    width: '100%',
-                  }}
+                  className="offline-action-btn primary"
                 >
+                  <Link2 size={17} />
                   {isGenerating ? 'Generating...' : t('generateOfferBtn')}
                 </button>
               ) : (
                 <div>
-                  <div className="pairing-code-area">{generatedOfferCode}</div>
+                  {/* Format Toggle: QR vs Code */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 12 }}>
+                    <button
+                      type="button"
+                      onClick={() => setViewFormat('qr')}
+                      className={`offline-format-pill ${viewFormat === 'qr' ? 'active' : ''}`}
+                    >
+                      <QrCode size={14} /> QR Code
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewFormat('code')}
+                      className={`offline-format-pill ${viewFormat === 'code' ? 'active' : ''}`}
+                    >
+                      <FileText size={14} /> Text Code
+                    </button>
+                  </div>
+
+                  {viewFormat === 'qr' && offerQrUrl ? (
+                    <div className="offline-qr-box">
+                      <img src={offerQrUrl} alt="Offer QR Code" style={{ width: '210px', height: '210px', display: 'block' }} />
+                      <span className="offline-qr-caption">
+                        Scan on Device 2
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="offline-code-display">
+                      {generatedOfferCode}
+                    </div>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => copyToClipboard(generatedOfferCode, false)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      width: '100%',
-                      padding: '8px',
-                      background: 'rgba(255,255,255,0.08)',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '12px',
-                    }}
+                    className="offline-copy-btn"
                   >
-                    {isCopied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
+                    {isCopied ? <Check size={16} color="#34d399" /> : <Copy size={16} />}
                     {isCopied ? t('codeCopied') : t('copyCode')}
                   </button>
                 </div>
@@ -251,8 +315,8 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
             </div>
 
             {generatedOfferCode && (
-              <div className="pairing-step-box">
-                <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 8 }}>
+              <div className="offline-step-card" style={{ marginTop: 16 }}>
+                <h3 className="offline-step-title">
                   {t('step2Title')}
                 </h3>
                 <textarea
@@ -260,26 +324,15 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
                   placeholder={t('answerCodePlaceholder')}
                   value={answerInputCode}
                   onChange={(e) => setAnswerInputCode(e.target.value)}
-                  style={{ width: '100%', marginBottom: 10, fontSize: '12px' }}
+                  className="offline-code-textarea"
                 />
                 <button
                   type="button"
                   onClick={handleApplyAnswer}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6,
-                    padding: '10px 18px',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--emerald-primary)',
-                    color: 'white',
-                    fontWeight: 600,
-                    fontSize: '13px',
-                    width: '100%',
-                  }}
+                  disabled={!answerInputCode.trim()}
+                  className="offline-action-btn primary"
                 >
-                  <Link2 size={16} />
+                  <Link2 size={17} />
                   {t('applyAnswerBtn')}
                 </button>
               </div>
@@ -287,8 +340,8 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
           </div>
         ) : (
           <div>
-            <div className="pairing-step-box">
-              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 8 }}>
+            <div className="offline-step-card">
+              <h3 className="offline-step-title">
                 {t('orScanOfferTitle')}
               </h3>
               <textarea
@@ -296,52 +349,41 @@ export const OfflinePairingModal: React.FC<OfflinePairingModalProps> = ({
                 placeholder={t('pasteOfferPlaceholder')}
                 value={offerInputCode}
                 onChange={(e) => setOfferInputCode(e.target.value)}
-                style={{ width: '100%', marginBottom: 10, fontSize: '12px' }}
+                className="offline-code-textarea"
               />
               <button
                 type="button"
                 onClick={handleGenerateAnswer}
                 disabled={isGenerating || !offerInputCode.trim()}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  padding: '10px 18px',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--emerald-primary)',
-                  color: 'white',
-                  fontWeight: 600,
-                  fontSize: '13px',
-                  width: '100%',
-                }}
+                className="offline-action-btn primary"
               >
                 {isGenerating ? 'Computing...' : t('generateAnswerBtn')}
               </button>
             </div>
 
             {generatedAnswerCode && (
-              <div className="pairing-step-box">
-                <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 8 }}>
+              <div className="offline-step-card" style={{ marginTop: 16 }}>
+                <h3 className="offline-step-title">
                   Your Answer Code (Provide to Device 1)
                 </h3>
-                <div className="pairing-code-area">{generatedAnswerCode}</div>
+                {answerQrUrl ? (
+                  <div className="offline-qr-box">
+                    <img src={answerQrUrl} alt="Answer QR Code" style={{ width: '210px', height: '210px', display: 'block' }} />
+                    <span className="offline-qr-caption">
+                      Device 1 Scan or Copy Text
+                    </span>
+                  </div>
+                ) : (
+                  <div className="offline-code-display">
+                    {generatedAnswerCode}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => copyToClipboard(generatedAnswerCode, true)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6,
-                    width: '100%',
-                    padding: '8px',
-                    background: 'rgba(255,255,255,0.08)',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '12px',
-                  }}
+                  className="offline-copy-btn"
                 >
-                  {isAnswerCopied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
+                  {isAnswerCopied ? <Check size={16} color="#34d399" /> : <Copy size={16} />}
                   {isAnswerCopied ? t('codeCopied') : t('copyCode')}
                 </button>
               </div>

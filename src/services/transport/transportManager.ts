@@ -3,12 +3,13 @@
 // and enforces idempotent delivery and status reporting across WebRTC, Supabase Realtime, and Outbox
 
 import { getDatabase } from '../db/database';
-import type { Message, TransportType, Conversation } from '../db/database';
+import type { Message, TransportType, Conversation, Contact } from '../db/database';
 import { WebRTCService } from './webrtcService';
 import { SyncEngine } from '../sync/syncEngine';
 import { CryptoService } from '../crypto/cryptoService';
 import { getSupabaseConfig } from '../supabase/supabaseClient';
 import { SupabaseRealtimeService } from './supabaseRealtimeService';
+import { LanSignalingService } from './lanSignalingService';
 
 export interface TransportStatus {
   isOnlineInternet: boolean;
@@ -24,10 +25,162 @@ export class TransportManager {
   private static broadcastChannel: BroadcastChannel | null = null;
 
   public static onIncomingMessage?: (msg: Message) => void;
-  public static onReactionUpdate?: (msgId: string, reactions: { [emoji: string]: number }) => void;
+  public static onReactionUpdate?: (msgId: string, reactions: { [emoji: string]: number }, reactionUsers?: Record<string, any>) => void;
   public static onDeleteMessage?: (msgId: string) => void;
   public static onClearHistory?: (conversationId: string) => void;
   public static onDeleteConversation?: (conversationId: string) => void;
+  public static onGroupUpdate?: (
+    conversationId: string,
+    updates: { avatarUrl?: string; name?: string; description?: string }
+  ) => void;
+  public static onGroupSync?: (payload: {
+    conversation: Conversation;
+    addedParticipantIds?: string[];
+    invitedByName?: string;
+    systemMessage?: Message;
+  }) => void;
+  public static onProfileUpdate?: (profile: {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl?: string;
+    bio?: string;
+  }) => void;
+  public static onReadReceipt?: (conversationId: string, readerId: string) => void;
+
+  public static async handleIncomingMeshEvent(data: any): Promise<void> {
+    if (!data || !data.type) return;
+
+    // 1. Reaction Updates
+    if (data.type === 'reaction_update') {
+      const db = await getDatabase();
+      const m = await db.get('messages', data.msgId);
+      if (m) {
+        m.reactions = data.reactions;
+        if (data.reactionUsers) {
+          m.reactionUsers = data.reactionUsers;
+        }
+        await db.put('messages', m);
+      }
+      if (this.onReactionUpdate) {
+        this.onReactionUpdate(data.msgId, data.reactions, data.reactionUsers);
+      }
+      return;
+    }
+
+    // 2. Delete Message
+    if (data.type === 'delete_message' || data.type === 'delete_message_for_everyone') {
+      const db = await getDatabase();
+      await db.delete('messages', data.msgId);
+      if (this.onDeleteMessage) {
+        this.onDeleteMessage(data.msgId);
+      }
+      return;
+    }
+
+    // 3. Clear History
+    if (data.type === 'clear_history') {
+      const db = await getDatabase();
+      const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
+      for (const m of allMsgs) {
+        await db.delete('messages', m.id);
+      }
+      if (this.onClearHistory) {
+        this.onClearHistory(data.conversationId);
+      }
+      return;
+    }
+
+    // 4. Delete Conversation
+    if (data.type === 'delete_conversation') {
+      const db = await getDatabase();
+      await db.delete('conversations', data.conversationId);
+      const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
+      for (const m of allMsgs) {
+        await db.delete('messages', m.id);
+      }
+      if (this.onDeleteConversation) {
+        this.onDeleteConversation(data.conversationId);
+      }
+      return;
+    }
+
+    // 5. Group Metadata Update
+    if (data.type === 'group_avatar_update' || data.type === 'group_update') {
+      const db = await getDatabase();
+      const conv = await db.get('conversations', data.conversationId);
+      if (conv) {
+        if (data.avatarUrl !== undefined) conv.avatarUrl = data.avatarUrl;
+        if (data.name !== undefined) conv.name = data.name;
+        if (data.description !== undefined) conv.description = data.description;
+        conv.updatedAt = Date.now();
+        await db.put('conversations', conv);
+      }
+      if (this.onGroupUpdate) {
+        this.onGroupUpdate(data.conversationId, {
+          avatarUrl: data.avatarUrl,
+          name: data.name,
+          description: data.description,
+        });
+      }
+      return;
+    }
+
+    // 6. Group Sync
+    if (data.type === 'group_sync') {
+      if (this.onGroupSync) {
+        this.onGroupSync(data);
+      }
+      return;
+    }
+
+    // 7. Read Receipt
+    if (data.type === 'read_receipt' && data.conversationId && data.readerId) {
+      if (this.onReadReceipt) {
+        this.onReadReceipt(data.conversationId, data.readerId);
+      }
+      return;
+    }
+
+    // 8. Live Peer Profile Update (Picture, Display Name, Username, Bio)
+    if (data.type === 'profile_update' && data.profile) {
+      const p = data.profile;
+      if (!p.id) return;
+      const db = await getDatabase();
+      const existingContact = await db.get('contacts', p.id);
+
+      const updatedContact: Contact = {
+        id: p.id,
+        displayName: p.displayName || existingContact?.displayName || (p.username ? `@${p.username}` : (p.id ? `Peer ${p.id.slice(0, 6)}` : 'Contact')),
+        username: p.username || existingContact?.username || '',
+        phoneNumber: p.phoneNumber || existingContact?.phoneNumber || '',
+        avatarUrl: p.avatarUrl !== undefined ? p.avatarUrl : existingContact?.avatarUrl,
+        notes: p.bio !== undefined ? p.bio : existingContact?.notes,
+        publicKey: p.publicKey || existingContact?.publicKey || '',
+        isBlocked: existingContact?.isBlocked ?? false,
+        isOnlineDirect: existingContact?.isOnlineDirect ?? false,
+        isOnlineInternet: existingContact?.isOnlineInternet ?? true,
+        lastSeen: Date.now(),
+        createdAt: existingContact?.createdAt || Date.now(),
+      };
+      await db.put('contacts', updatedContact);
+
+      // Also ensure any direct conversations with this peer reflect the updated profile
+      const allConvs = await db.getAll('conversations');
+      for (const conv of allConvs) {
+        if (conv.type === 'direct' && conv.participantIds.includes(p.id)) {
+          if (p.displayName) conv.name = p.displayName;
+          if (p.avatarUrl !== undefined) conv.avatarUrl = p.avatarUrl;
+          await db.put('conversations', conv);
+        }
+      }
+
+      if (this.onProfileUpdate) {
+        this.onProfileUpdate(p);
+      }
+      return;
+    }
+  }
 
   public static init() {
     window.addEventListener('online', () => this.notifyStatusChange());
@@ -41,58 +194,8 @@ export class TransportManager {
         const data = event.data;
         if (!data) return;
 
-        // Check if event is a reaction update
-        if (data.type === 'reaction_update') {
-          console.log('BroadcastChannel reaction update:', data);
-          const db = await getDatabase();
-          const m = await db.get('messages', data.msgId);
-          if (m) {
-            m.reactions = data.reactions;
-            await db.put('messages', m);
-          }
-          if (this.onReactionUpdate) {
-            this.onReactionUpdate(data.msgId, data.reactions);
-          }
-          return;
-        }
-
-        // Check if event is a delete message
-        if (data.type === 'delete_message') {
-          console.log('BroadcastChannel delete message:', data);
-          const db = await getDatabase();
-          await db.delete('messages', data.msgId);
-          if (this.onDeleteMessage) {
-            this.onDeleteMessage(data.msgId);
-          }
-          return;
-        }
-
-        // Check if event is clear history
-        if (data.type === 'clear_history') {
-          console.log('BroadcastChannel clear history:', data);
-          const db = await getDatabase();
-          const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
-          for (const m of allMsgs) {
-            await db.delete('messages', m.id);
-          }
-          if (this.onClearHistory) {
-            this.onClearHistory(data.conversationId);
-          }
-          return;
-        }
-
-        // Check if event is delete conversation
-        if (data.type === 'delete_conversation') {
-          console.log('BroadcastChannel delete conversation:', data);
-          const db = await getDatabase();
-          await db.delete('conversations', data.conversationId);
-          const allMsgs = await db.getAllFromIndex('messages', 'by-conversation', data.conversationId);
-          for (const m of allMsgs) {
-            await db.delete('messages', m.id);
-          }
-          if (this.onDeleteConversation) {
-            this.onDeleteConversation(data.conversationId);
-          }
+        if (data.type) {
+          await this.handleIncomingMeshEvent(data);
           return;
         }
 
@@ -120,9 +223,9 @@ export class TransportManager {
       }
     };
 
-    SupabaseRealtimeService.onReactionReceived = (msgId, reactions) => {
+    SupabaseRealtimeService.onReactionReceived = (msgId, reactions, reactionUsers) => {
       if (this.onReactionUpdate) {
-        this.onReactionUpdate(msgId, reactions);
+        this.onReactionUpdate(msgId, reactions, reactionUsers);
       }
     };
 
@@ -144,6 +247,28 @@ export class TransportManager {
       }
     };
 
+    SupabaseRealtimeService.onGroupUpdateReceived = (conversationId, updates) => {
+      if (this.onGroupUpdate) {
+        this.onGroupUpdate(conversationId, updates);
+      }
+    };
+
+    SupabaseRealtimeService.onGroupSyncReceived = (payload) => {
+      if (this.onGroupSync) {
+        this.onGroupSync(payload);
+      }
+    };
+
+    SupabaseRealtimeService.onProfileUpdateReceived = async (profile) => {
+      await this.handleIncomingMeshEvent({ type: 'profile_update', profile });
+    };
+
+    SupabaseRealtimeService.onReadReceiptReceived = (conversationId, readerId) => {
+      if (this.onReadReceipt) {
+        this.onReadReceipt(conversationId, readerId);
+      }
+    };
+
     // 3. Setup WebRTC DataChannel incoming message listener
     WebRTCService.onChatMessageReceived = async (msg) => {
       console.log('WebRTC DataChannel incoming message:', msg);
@@ -157,7 +282,7 @@ export class TransportManager {
   }
 
   /**
-   * Broadcasts an event (reaction, delete, clear history) across all active transports
+   * Broadcasts an event (reaction, delete, clear history, profile update) across all active transports
    */
   public static broadcastEvent(event: any) {
     if (this.broadcastChannel) {
@@ -168,6 +293,18 @@ export class TransportManager {
       }
     }
     SupabaseRealtimeService.getInstance().broadcastMeshEvent(event);
+
+    // Also forward through local LAN hub for zero-internet Wi-Fi peers
+    try {
+      LanSignalingService.sendSignal({
+        type: 'mesh_action',
+        senderId: '',
+        senderName: '',
+        targetId: 'all',
+        payload: event,
+        timestamp: Date.now(),
+      });
+    } catch {}
   }
 
   public static registerPeerConnected(peerId: string) {
@@ -274,7 +411,8 @@ export class TransportManager {
         const sent = await SupabaseRealtimeService.getInstance().dispatchDirectMessage(peerId, message);
         if (sent) {
           message.transport = 'internet_supabase';
-          message.status = 'delivered';
+          const isPeerActive = SupabaseRealtimeService.onlineUserIds.has(peerId);
+          message.status = isPeerActive ? 'delivered' : 'sent';
           await db.put('messages', message);
           await this.updateConversationSnippet(message);
           return { message, transportUsed: 'internet_supabase' };
@@ -296,12 +434,22 @@ export class TransportManager {
   }
 
   private static async updateConversationSnippet(message: Message) {
+    if (
+      message.conversationId.includes('demo') ||
+      message.conversationId.includes('mesh_direct') ||
+      message.conversationId === 'direct_mesh' ||
+      message.senderId.includes('demo') ||
+      (message.recipientId && message.recipientId.includes('demo'))
+    ) {
+      return;
+    }
     const db = await getDatabase();
     let conv = await db.get('conversations', message.conversationId);
-    let snippet = message.content;
+    let snippet = (message.content || '').replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim();
     if (message.type === 'voice') snippet = '🎙️ Voice note';
     if (message.type === 'file') snippet = `📎 ${message.media?.fileName || 'File attachment'}`;
-    if (message.type === 'call_event') snippet = '📞 Call log';
+    if (message.type === 'call_event') snippet = message.content ? message.content.replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim() : '📞 Call log';
+    snippet = snippet.slice(0, 100);
 
     if (conv) {
       conv.lastMessageSnippet = snippet;

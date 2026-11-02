@@ -113,6 +113,7 @@ export class OfflinePairing {
   ): Promise<{
     pc: RTCPeerConnection;
     answerCode: string;
+    offerPayload: OfflinePairingPayload;
     localAudioStream?: MediaStream;
     onDataChannel: (cb: (channel: RTCDataChannel) => void) => void;
   }> {
@@ -148,7 +149,7 @@ export class OfflinePairing {
     for (const cand of offerPayload.candidates) {
       try {
         await pc.addIceCandidate(new RTCIceCandidate(cand));
-      } catch (err) {
+      } catch {
         // Safe skip non-viable candidates
       }
     }
@@ -181,6 +182,7 @@ export class OfflinePairing {
     return {
       pc,
       answerCode: this.encodePayload(answerPayload),
+      offerPayload,
       localAudioStream,
       onDataChannel: (cb) => {
         channelCallback = cb;
@@ -191,7 +193,7 @@ export class OfflinePairing {
   /**
    * Completes the handshake on the offerer's side with the answer code
    */
-  public static async applyDirectAnswer(pc: RTCPeerConnection, answerCode: string): Promise<void> {
+  public static async applyDirectAnswer(pc: RTCPeerConnection, answerCode: string): Promise<OfflinePairingPayload> {
     const answerPayload = this.decodePayload(answerCode);
     if (answerPayload.type !== 'answer') {
       throw new Error('Provided code is not an answer payload');
@@ -205,5 +207,7 @@ export class OfflinePairing {
         // Continue
       }
     }
+
+    return answerPayload;
   }
 }

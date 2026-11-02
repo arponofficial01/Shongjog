@@ -2,6 +2,8 @@ import { getSupabase, getSupabaseConfig } from '../supabase/supabaseClient';
 import { IdentityService } from '../identity/identityService';
 import { getDatabase } from '../db/database';
 import type { UserProfile } from '../db/database';
+import { FirebaseAuthService } from './firebaseAuthService';
+import { TextbeeService } from './textbeeService';
 
 export interface OtpSession {
   phoneNumber: string;
@@ -10,6 +12,7 @@ export interface OtpSession {
   code: string;
   expiresAt: number;
   attempts: number;
+  provider?: 'textbee' | 'firebase' | 'supabase' | 'simulated';
 }
 
 const OTP_SESSION_KEY = 'shongjog_otp_session';
@@ -17,7 +20,11 @@ const OTP_SESSION_KEY = 'shongjog_otp_session';
 export class AuthService {
   /**
    * Dispatches an OTP verification code online to a Bangladeshi mobile number.
-   * Rejects any invalid or non-existent numbers.
+   * Priority:
+   * 1. TextBee (100% Free real SMS via Android phone SIM, zero credit card)
+   * 2. Firebase Phone Auth (If configured with Blaze)
+   * 3. Supabase Auth SMS
+   * 4. Instant Dev Testing Code
    */
   public static async sendOtp(phoneInput: string): Promise<{
     success: boolean;
@@ -26,6 +33,7 @@ export class AuthService {
     devOtp: string;
     isRealSms?: boolean;
     smsNotice?: string | null;
+    provider?: 'textbee' | 'firebase' | 'supabase' | 'simulated';
   }> {
     if (!navigator.onLine) {
       throw new Error('Internet connection required for real-time OTP verification.');
@@ -39,32 +47,73 @@ export class AuthService {
     const formatted = val.formatted;
     const operator = val.operator || 'Bangladesh Mobile Network';
 
-    // Cryptographically random 6-digit fallback OTP
+    // Cryptographically random 6-digit OTP
     const array = new Uint32Array(1);
     crypto.getRandomValues(array);
     const otpCode = (100000 + (array[0] % 900000)).toString();
 
-    // Call Supabase Auth native SMS OTP
-    const { isConfigured } = getSupabaseConfig();
-    let supabaseSmsSent = false;
+    let isRealSms = false;
     let smsNotice: string | null = null;
+    let activeProvider: 'textbee' | 'firebase' | 'supabase' | 'simulated' = 'simulated';
 
-    if (isConfigured) {
+    // 1. Try TextBee (100% Free Android SIM SMS Gateway - No credit card required)
+    if (TextbeeService.isConfigured()) {
       try {
-        const supabase = getSupabase();
-        const { error } = await supabase.auth.signInWithOtp({
-          phone: formatted,
-        });
-        if (error) {
-          smsNotice = error.message;
-          console.info('Supabase Phone Auth Notice:', error.message);
+        const tbRes = await TextbeeService.sendOtp(formatted, otpCode);
+        if (tbRes.success) {
+          isRealSms = true;
+          activeProvider = 'textbee';
+          smsNotice = null;
         } else {
-          supabaseSmsSent = true;
+          smsNotice = tbRes.error || 'TextBee SMS delivery failed.';
+          console.warn('[TextBee SMS Error]:', tbRes.error);
         }
-      } catch (err: any) {
-        smsNotice = err?.message || 'Supabase SMS provider unreachable';
-        console.info('Supabase SMS Gateway Error:', err?.message);
+      } catch (tbErr: any) {
+        smsNotice = tbErr?.message || 'TextBee gateway unreachable';
+        console.warn('[TextBee Gateway Error]:', tbErr);
       }
+    }
+
+    // 2. Fallback to Firebase Phone Auth if configured and TextBee not active
+    if (!isRealSms) {
+      const { isConfigured: isFirebaseReady } = FirebaseAuthService.getConfig();
+      if (isFirebaseReady) {
+        try {
+          const fbRes = await FirebaseAuthService.sendSmsOtp(formatted);
+          if (fbRes.success) {
+            isRealSms = true;
+            activeProvider = 'firebase';
+            smsNotice = null;
+          } else {
+            console.warn('[Firebase SMS Notice]:', fbRes.error);
+          }
+        } catch (fbErr: any) {
+          console.warn('[Firebase SMS Error]:', fbErr);
+        }
+      }
+    }
+
+    // 3. Fallback to Supabase SMS if configured
+    if (!isRealSms) {
+      const { isConfigured: isSupabaseConfigured } = getSupabaseConfig();
+      if (isSupabaseConfigured) {
+        try {
+          const supabase = getSupabase();
+          const { error } = await supabase.auth.signInWithOtp({
+            phone: formatted,
+          });
+          if (!error) {
+            isRealSms = true;
+            activeProvider = 'supabase';
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (!isRealSms && !smsNotice) {
+      smsNotice = 'Add VITE_TEXTBEE_API_KEY in .env to dispatch real SMS automatically from your Android phone!';
     }
 
     // Store verified OTP session (valid for 5 minutes)
@@ -75,6 +124,7 @@ export class AuthService {
       code: otpCode,
       expiresAt: Date.now() + 5 * 60 * 1000,
       attempts: 0,
+      provider: activeProvider,
     };
     sessionStorage.setItem(OTP_SESSION_KEY, JSON.stringify(session));
 
@@ -83,8 +133,9 @@ export class AuthService {
       formattedPhone: formatted,
       operator,
       devOtp: otpCode,
-      isRealSms: supabaseSmsSent,
+      isRealSms,
       smsNotice,
+      provider: activeProvider,
     };
   }
 
@@ -121,25 +172,42 @@ export class AuthService {
     }
     sessionStorage.setItem(OTP_SESSION_KEY, JSON.stringify(session));
 
-    // Try Supabase auth verify
-    const { isConfigured } = getSupabaseConfig();
-    let supabaseVerified = false;
-    if (isConfigured) {
-      try {
-        const supabase = getSupabase();
-        const { error } = await supabase.auth.verifyOtp({
-          phone: formattedPhone,
-          token: inputOtp.trim(),
-          type: 'sms',
-        });
-        if (!error) supabaseVerified = true;
-      } catch (e) {
-        // Fall back to session code check
+    let isVerified = false;
+
+    // 1. If Firebase sent the SMS, verify with Firebase
+    if (session.provider === 'firebase') {
+      const fbVerify = await FirebaseAuthService.verifySmsOtp(inputOtp);
+      if (fbVerify.verified) {
+        isVerified = true;
+      } else if (inputOtp.trim() !== session.code) {
+        throw new Error(fbVerify.error || 'Incorrect verification code. Please check and try again.');
       }
     }
 
-    const codeMatches = inputOtp.trim() === session.code || supabaseVerified;
-    if (!codeMatches) {
+    // 2. Try Supabase auth verify if Supabase was the provider
+    if (!isVerified && session.provider === 'supabase') {
+      const { isConfigured } = getSupabaseConfig();
+      if (isConfigured) {
+        try {
+          const supabase = getSupabase();
+          const { error } = await supabase.auth.verifyOtp({
+            phone: formattedPhone,
+            token: inputOtp.trim(),
+            type: 'sms',
+          });
+          if (!error) isVerified = true;
+        } catch {
+          // Fall back to session code check
+        }
+      }
+    }
+
+    // 3. Simulated code match or fallback
+    if (!isVerified && inputOtp.trim() === session.code) {
+      isVerified = true;
+    }
+
+    if (!isVerified) {
       throw new Error('Incorrect verification code. Please check and try again.');
     }
 
@@ -148,6 +216,7 @@ export class AuthService {
 
     // Check if this phone number already has a registered profile in Supabase
     let existingProfile: UserProfile | null = null;
+    const { isConfigured } = getSupabaseConfig();
     if (isConfigured) {
       try {
         const supabase = getSupabase();
@@ -206,7 +275,7 @@ export class AuthService {
         .maybeSingle();
 
       return !data;
-    } catch (err) {
+    } catch {
       return true;
     }
   }

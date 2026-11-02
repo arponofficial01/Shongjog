@@ -15,10 +15,12 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   mediaUrl,
   durationSeconds = 0,
   waveform = [],
+  isOutgoing = false,
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [metaDuration, setMetaDuration] = useState<number>(durationSeconds || 1);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -27,11 +29,15 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
 
     async function loadAudio() {
       if (blobKey) {
-        const blob = await getMediaBlob(blobKey);
-        if (blob) {
-          objectUrl = URL.createObjectURL(blob);
-          setAudioUrl(objectUrl);
-          return;
+        try {
+          const blob = await getMediaBlob(blobKey);
+          if (blob) {
+            objectUrl = URL.createObjectURL(blob);
+            setAudioUrl(objectUrl);
+            return;
+          }
+        } catch (e) {
+          console.warn('Failed to load audio blob from IDB', e);
         }
       }
       if (mediaUrl) {
@@ -48,7 +54,8 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     };
   }, [blobKey, mediaUrl]);
 
-  const togglePlay = () => {
+  const togglePlay = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (!audioRef.current || !audioUrl) return;
 
     if (isPlaying) {
@@ -58,8 +65,8 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
       audioRef.current.playbackRate = playbackSpeed;
       audioRef.current.play().then(() => {
         setIsPlaying(true);
-      }).catch((e) => {
-        console.warn('Voice playback failed', e);
+      }).catch((err) => {
+        console.warn('Real-time voice playback error:', err);
       });
     }
   };
@@ -92,20 +99,27 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     return `${mins}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  const bars = waveform && waveform.length > 0 ? waveform : [
-    25, 45, 60, 30, 75, 90, 50, 65, 30, 45, 80, 100, 70, 40, 60, 85, 40, 25, 55, 70, 35, 45, 60, 30
+  const defaultBars = [
+    28, 45, 62, 34, 78, 92, 54, 68, 36, 48, 82, 100, 74, 44, 62, 88, 42, 28, 58, 72, 38, 48, 64, 32
   ];
-  const progressRatio = durationSeconds > 0 ? currentTime / durationSeconds : 0;
+  const bars = waveform && waveform.length > 0 ? waveform : defaultBars;
+  const totalDuration = durationSeconds > 0 ? durationSeconds : metaDuration;
+  const progressRatio = totalDuration > 0 ? currentTime / totalDuration : 0;
   const activeBarIndex = Math.floor(progressRatio * bars.length);
 
   return (
-    <div className="lux-voice-card">
+    <div className={`lux-voice-card ${isOutgoing ? 'outgoing' : 'incoming'}`}>
       {audioUrl && (
         <audio
           ref={audioRef}
           src={audioUrl}
+          onLoadedMetadata={(e) => {
+            const d = e.currentTarget.duration;
+            if (d && !isNaN(d) && isFinite(d)) setMetaDuration(d);
+          }}
           onTimeUpdate={handleTimeUpdate}
           onEnded={handleEnded}
+          preload="metadata"
         />
       )}
 
@@ -113,41 +127,47 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
         type="button"
         className="lux-voice-play"
         onClick={togglePlay}
-        title={isPlaying ? 'Pause' : 'Play'}
+        title={isPlaying ? 'Pause Voice Note' : 'Play Real Voice Note'}
       >
-        {isPlaying ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: 2 }} />}
+        {isPlaying ? <Pause size={17} /> : <Play size={17} style={{ marginLeft: 2 }} />}
       </button>
 
-      <div className="lux-voice-bars">
+      <div
+        className="lux-voice-bars"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!audioRef.current || totalDuration <= 0) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const clickX = e.clientX - rect.left;
+          const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+          audioRef.current.currentTime = ratio * totalDuration;
+          setCurrentTime(ratio * totalDuration);
+        }}
+        style={{ cursor: 'pointer' }}
+        title="Click to seek"
+      >
         {bars.map((height, idx) => (
           <div
             key={idx}
             className={`lux-bar ${idx <= activeBarIndex ? 'active' : ''}`}
             style={{
-              height: `${Math.max(18, Math.min(100, height))}%`,
-              opacity: idx <= activeBarIndex ? 1 : 0.45,
+              height: `${Math.max(20, Math.min(100, height))}%`,
             }}
           />
         ))}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.75)', fontVariantNumeric: 'tabular-nums' }}>
-          {formatSeconds(isPlaying ? currentTime : durationSeconds)}
+      <div className="lux-voice-meta-tags">
+        <span className="lux-voice-duration">
+          {formatSeconds(isPlaying ? currentTime : (durationSeconds || 0))}
         </span>
 
         {isPlaying && (
           <button
             type="button"
+            className="lux-voice-speed-chip"
             onClick={cycleSpeed}
-            style={{
-              fontSize: '10px',
-              fontWeight: 700,
-              backgroundColor: 'rgba(255, 255, 255, 0.18)',
-              padding: '1px 5px',
-              borderRadius: '6px',
-              color: 'white',
-            }}
+            title="Change Playback Speed"
           >
             {playbackSpeed}x
           </button>

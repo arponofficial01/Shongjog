@@ -1,8 +1,8 @@
 import { openDB } from 'idb';
 import type { DBSchema, IDBPDatabase } from 'idb';
 
-export type MessageType = 'text' | 'voice' | 'file' | 'call_event';
-export type MessageStatus = 'queued' | 'sending' | 'delivered' | 'read' | 'synced';
+export type MessageType = 'text' | 'voice' | 'file' | 'image' | 'call_event' | 'system';
+export type MessageStatus = 'queued' | 'sending' | 'sent' | 'delivered' | 'read' | 'synced';
 export type TransportType = 'internet_supabase' | 'direct_webrtc_lan' | 'manual_p2p' | 'offline_queued';
 
 export interface UserProfile {
@@ -10,10 +10,16 @@ export interface UserProfile {
   phoneNumber: string;
   username: string;
   displayName: string;
+  email?: string;
   avatarUrl?: string;
   bio?: string;
+  passwordHash?: string;
+  recoveryPinHash?: string;
+  lastUsernameChange?: number;
   publicKey?: string;
   deviceId: string;
+  chatLockPin?: string;
+  syncedSettings?: Record<string, any>;
   createdAt: number;
   updatedAt: number;
 }
@@ -28,8 +34,12 @@ export interface Contact {
   publicKey?: string;
   deviceId?: string;
   isBlocked: boolean;
+  isRestricted?: boolean;
+  isSaved?: boolean;
+  isVerified?: boolean;
   notes?: string;
   lastSeen?: number;
+  createdAt?: number;
   isOnlineDirect?: boolean; // connected over direct WebRTC LAN
   isOnlineInternet?: boolean; // online via Supabase
 }
@@ -47,6 +57,21 @@ export interface Conversation {
   isPinned?: boolean;
   isArchived?: boolean;
   isMuted?: boolean;
+  mutedUntil?: number;
+  isFavourite?: boolean;
+  isStarred?: boolean;
+  disappearingSeconds?: number;
+  isLocked?: boolean;
+  adminIds?: string[];
+  description?: string;
+  avatarUrl?: string;
+  permissions?: {
+    onlyAdminsCanSend?: boolean;
+    onlyAdminsCanEditInfo?: boolean;
+  };
+  memberJoinConfig?: Record<string, { joinedAt: number; shareHistory: boolean }>;
+  inviteStatus?: 'pending' | 'accepted';
+  invitedByName?: string;
 }
 
 export interface MessageMedia {
@@ -57,6 +82,15 @@ export interface MessageMedia {
   mimeType?: string;
   durationSeconds?: number;
   waveform?: number[];
+}
+
+export interface MessageReactionUser {
+  userId: string;
+  name: string;
+  username?: string;
+  avatarUrl?: string;
+  emoji: string;
+  timestamp: number;
 }
 
 export interface Message {
@@ -76,6 +110,19 @@ export interface Message {
   signature?: string;
   isDeliveredDirectOffline?: boolean;
   reactions?: { [emoji: string]: number };
+  reactionUsers?: Record<string, MessageReactionUser>;
+  readBy?: Record<string, number>;
+  replyTo?: {
+    id: string;
+    senderName: string;
+    content: string;
+    type: MessageType;
+  };
+  isStarred?: boolean;
+  isPinned?: boolean;
+  isEdited?: boolean;
+  deletedForMe?: boolean;
+  deletedForEveryone?: boolean;
 }
 
 export interface OutboxItem {

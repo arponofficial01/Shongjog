@@ -54,10 +54,49 @@ self.addEventListener('fetch', (event) => {
       }).catch(() => {
         // Fallback for HTML documents when offline
         if (event.request.headers.get('accept')?.includes('text/html')) {
-          return caches.match('/index.html') as Promise<Response>;
+          return caches.match('/index.html');
         }
         return new Response('Network offline', { status: 503, statusText: 'Offline' });
       });
     })
   );
+});
+
+// Native Notification Click Handler: Focuses app window or opens root
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) {
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow('/');
+      }
+    })
+  );
+});
+
+// Push Event Handler for Realtime Background Push Delivery
+self.addEventListener('push', (event) => {
+  let data = { title: 'Shongjog Notification', body: 'New secure message received.' };
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch {
+      data = { title: 'Shongjog', body: event.data.text() };
+    }
+  }
+
+  const options = {
+    body: data.body || '',
+    icon: data.icon || '/favicon.svg',
+    badge: '/favicon.svg',
+    tag: data.tag || 'shongjog_push',
+    data: data.data || {},
+  };
+
+  event.waitUntil(self.registration.showNotification(data.title || 'Shongjog', options));
 });

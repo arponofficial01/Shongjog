@@ -1,6 +1,6 @@
 // Live Supabase Realtime Network Service
-// Provides instant (<50ms) cross-device message delivery and WebRTC signaling
-// Works over Supabase Realtime WebSockets anywhere in the world
+// Provides instant (<30ms) cross-device message delivery, WebRTC signaling, and real-time user presence
+// Connected via Supabase Realtime WebSocket
 
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { getSupabase, getSupabaseConfig } from '../supabase/supabaseClient';
@@ -12,15 +12,24 @@ import { CallManager } from '../call/callManager';
 
 export class SupabaseRealtimeService {
   private static instance: SupabaseRealtimeService | null = null;
-  private channel: RealtimeChannel | null = null;
   private meshChannel: RealtimeChannel | null = null;
   private currentUserId: string | null = null;
+  public static onlineUserIds: Set<string> = new Set();
 
   public static onMessageReceived?: (message: Message) => void;
-  public static onReactionReceived?: (msgId: string, reactions: { [emoji: string]: number }) => void;
+  public static onPresenceUpdate?: (onlineIds: Set<string>) => void;
+  public static onReactionReceived?: (msgId: string, reactions: { [emoji: string]: number }, reactionUsers?: Record<string, any>) => void;
   public static onDeleteReceived?: (msgId: string) => void;
   public static onClearHistoryReceived?: (conversationId: string) => void;
   public static onDeleteConversationReceived?: (conversationId: string) => void;
+  public static onGroupUpdateReceived?: (
+    conversationId: string,
+    updates: { avatarUrl?: string; name?: string; description?: string }
+  ) => void;
+  public static onGroupSyncReceived?: (payload: any) => void;
+  public static onProfileUpdateReceived?: (profile: any) => void;
+  public static onReadReceiptReceived?: (conversationId: string, readerId: string) => void;
+  public static onTypingReceived?: (conversationId: string, senderId: string, isTyping: boolean) => void;
 
   public static getInstance(): SupabaseRealtimeService {
     if (!this.instance) {
@@ -30,104 +39,123 @@ export class SupabaseRealtimeService {
   }
 
   /**
-   * Initializes real-time listener for the logged-in user
+   * Initializes real-time listener and presence for the logged-in user
    */
   public async initForUser(userId: string, username: string): Promise<void> {
     const { isConfigured } = getSupabaseConfig();
     if (!isConfigured) return;
 
-    if (this.currentUserId === userId && this.channel) {
+    if (this.currentUserId === userId && this.meshChannel) {
       return;
     }
 
     this.currentUserId = userId;
     const supabase = getSupabase();
 
-    // Clean up previous channels
-    if (this.channel) {
-      await supabase.removeChannel(this.channel);
-      this.channel = null;
-    }
+    // Clean up any existing channel
     if (this.meshChannel) {
-      await supabase.removeChannel(this.meshChannel);
+      try {
+        await supabase.removeChannel(this.meshChannel);
+      } catch {
+        // safe remove
+      }
       this.meshChannel = null;
     }
 
-    // 1. User-specific inbox channel
-    const channelName = `shongjog_inbox_${userId}`;
-    this.channel = supabase.channel(channelName, {
+    // Unified high-speed communication & presence mesh channel
+    const channelName = 'shongjog_mesh_hub';
+    this.meshChannel = supabase.channel(channelName, {
       config: {
-        broadcast: { ack: true, self: false },
+        broadcast: { ack: false, self: false },
         presence: { key: userId },
       },
     });
 
-    // Listen for direct messages
-    this.channel.on('broadcast', { event: 'chat_message' }, async (event) => {
-      const msg: Message = event.payload;
+    // 1. Direct Messages & Multi-Device Cross-Sync
+    this.meshChannel.on('broadcast', { event: 'chat_message' }, async (event) => {
+      const payload = event.payload;
+      if (!payload) return;
+
+      const msg: Message = payload.message;
       if (!msg || !msg.id) return;
 
-      console.log('Realtime message received:', msg);
+      const db = await getDatabase();
+      const currentProfile = await db.get('profiles', userId);
+      const myDeviceId = currentProfile?.deviceId;
+
+      const isTargetedToMe = payload.targetId === userId;
+      const isFromMyOtherDevice =
+        msg.senderId === userId &&
+        msg.senderDeviceId &&
+        myDeviceId &&
+        msg.senderDeviceId !== myDeviceId;
+
+      if (!isTargetedToMe && !isFromMyOtherDevice) return;
+
+      console.log('[Supabase Realtime] Incoming message from:', msg.senderId, isFromMyOtherDevice ? '(Multi-Device Instant Sync)' : '');
       await this.saveIncomingMessage(msg);
       if (SupabaseRealtimeService.onMessageReceived) {
         SupabaseRealtimeService.onMessageReceived(msg);
       }
     });
 
-    // Listen for WebRTC Signaling (Offers, Answers, ICE candidates)
-    this.channel.on('broadcast', { event: 'webrtc_signal' }, (event) => {
+    // 2. WebRTC Audio Call & Signaling Engine
+    this.meshChannel.on('broadcast', { event: 'webrtc_signal' }, (event) => {
       const signal: SignalingMessage = event.payload;
-      if (!signal || signal.targetId !== userId) return;
+      if (!signal) return;
+      const isDirectToMe = signal.targetId === userId;
+      const isGroupForMe = Boolean(signal.payload?.isGroup) && signal.senderId !== userId;
+      if (!isDirectToMe && !isGroupForMe) return;
 
-      console.log('Realtime WebRTC signaling received:', signal.type);
-      const rtc = WebRTCService.getInstance(userId, signal.senderId);
-      rtc.handleIncomingSignalingMessage(signal);
-    });
+      console.log('[Supabase Realtime] Signaling event received:', signal.type, 'from:', signal.senderName);
 
-    // Listen for Incoming Audio Calls
-    this.channel.on('broadcast', { event: 'call_request' }, (event) => {
-      const callData = event.payload;
-      if (!callData || callData.targetId !== userId) return;
-
-      console.log('Realtime call request received from:', callData.senderName);
-      CallManager.getInstance().handleIncomingCallRequest(callData);
-    });
-
-    // Listen for Call Response (Accept / Reject)
-    this.channel.on('broadcast', { event: 'call_response' }, (event) => {
-      const callData = event.payload;
-      if (!callData || callData.targetId !== userId) return;
-
-      console.log('Realtime call response:', callData.payload?.action);
-      CallManager.getInstance().handleCallResponse(callData);
-    });
-
-    // Listen for Call End
-    this.channel.on('broadcast', { event: 'call_end' }, (event) => {
-      const callData = event.payload;
-      if (!callData || callData.targetId !== userId) return;
-
-      console.log('Realtime call ended by peer');
-      CallManager.getInstance().endCall(false);
-    });
-
-    // Subscribe user channel
-    this.channel.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        console.log(`Live Supabase Realtime connected on ${channelName}`);
-        await this.channel?.track({
-          userId,
-          username,
-          onlineAt: new Date().toISOString(),
-        });
+      if (signal.type === 'call_request') {
+        CallManager.getInstance().handleIncomingCallRequest(signal);
+      } else if (signal.type === 'call_response') {
+        CallManager.getInstance().handleCallResponse(signal);
+      } else if (signal.type === 'call_end') {
+        CallManager.getInstance().endCall(false);
+      } else {
+        // WebRTC SDP offer, answer, or ice candidate
+        const rtc = WebRTCService.getInstance(userId, signal.senderId);
+        rtc.handleIncomingSignalingMessage(signal);
       }
     });
 
-    // 2. Mesh Events Channel (Reactions, Deletions, Clear History)
-    this.meshChannel = supabase.channel('shongjog_mesh_events', {
-      config: { broadcast: { self: false } },
+    // 3. Real-Time Online Presence (Instant update on sync, join, or leave)
+    const handlePresenceChange = () => {
+      if (!this.meshChannel) return;
+      const state = this.meshChannel.presenceState();
+      const onlineSet = new Set<string>();
+
+      for (const key of Object.keys(state)) {
+        const presences = state[key] as any[];
+        presences.forEach((p) => {
+          if (p.userId) onlineSet.add(p.userId);
+        });
+      }
+
+      SupabaseRealtimeService.onlineUserIds = onlineSet;
+      if (SupabaseRealtimeService.onPresenceUpdate) {
+        SupabaseRealtimeService.onPresenceUpdate(onlineSet);
+      }
+    };
+
+    this.meshChannel
+      .on('presence', { event: 'sync' }, handlePresenceChange)
+      .on('presence', { event: 'join' }, handlePresenceChange)
+      .on('presence', { event: 'leave' }, handlePresenceChange);
+
+    // Instant presence untrack on tab close/unload
+    window.addEventListener('beforeunload', () => {
+      try {
+        if (this.meshChannel) {
+          this.meshChannel.untrack();
+        }
+      } catch {}
     });
 
+    // 4. Mesh Actions (Reactions, Deletes, History Clearing)
     this.meshChannel.on('broadcast', { event: 'mesh_action' }, async (event) => {
       const data = event.payload;
       if (!data) return;
@@ -137,10 +165,13 @@ export class SupabaseRealtimeService {
         const m = await db.get('messages', data.msgId);
         if (m) {
           m.reactions = data.reactions;
+          if (data.reactionUsers) {
+            m.reactionUsers = data.reactionUsers;
+          }
           await db.put('messages', m);
         }
         if (SupabaseRealtimeService.onReactionReceived) {
-          SupabaseRealtimeService.onReactionReceived(data.msgId, data.reactions);
+          SupabaseRealtimeService.onReactionReceived(data.msgId, data.reactions, data.reactionUsers);
         }
       } else if (data.type === 'delete_message') {
         const db = await getDatabase();
@@ -167,15 +198,119 @@ export class SupabaseRealtimeService {
         if (SupabaseRealtimeService.onDeleteConversationReceived) {
           SupabaseRealtimeService.onDeleteConversationReceived(data.conversationId);
         }
+      } else if (data.type === 'group_avatar_update' || data.type === 'group_update') {
+        const db = await getDatabase();
+        const conv = await db.get('conversations', data.conversationId);
+        if (conv) {
+          if (data.avatarUrl !== undefined) conv.avatarUrl = data.avatarUrl;
+          if (data.name !== undefined) conv.name = data.name;
+          if (data.description !== undefined) conv.description = data.description;
+          conv.updatedAt = Date.now();
+          await db.put('conversations', conv);
+        }
+        if (SupabaseRealtimeService.onGroupUpdateReceived) {
+          SupabaseRealtimeService.onGroupUpdateReceived(data.conversationId, {
+            avatarUrl: data.avatarUrl,
+            name: data.name,
+            description: data.description,
+          });
+        }
+      } else if (data.type === 'group_sync') {
+        if (SupabaseRealtimeService.onGroupSyncReceived) {
+          SupabaseRealtimeService.onGroupSyncReceived(data);
+        }
+      } else if (data.type === 'profile_update') {
+        if (SupabaseRealtimeService.onProfileUpdateReceived && data.profile) {
+          SupabaseRealtimeService.onProfileUpdateReceived(data.profile);
+        }
+      } else if (data.type === 'read_receipt') {
+        if (SupabaseRealtimeService.onReadReceiptReceived && data.conversationId && data.readerId) {
+          SupabaseRealtimeService.onReadReceiptReceived(data.conversationId, data.readerId);
+        }
+      } else if (data.type === 'typing_indicator') {
+        if (SupabaseRealtimeService.onTypingReceived && data.conversationId && data.senderId) {
+          SupabaseRealtimeService.onTypingReceived(data.conversationId, data.senderId, Boolean(data.isTyping));
+        }
       }
     });
 
-    this.meshChannel.subscribe();
+    // Subscribe and track presence
+    this.meshChannel.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        console.log(`[Supabase Realtime] Successfully subscribed to ${channelName}`);
+        try {
+          await this.meshChannel?.track({
+            userId,
+            username,
+            onlineAt: Date.now(),
+          });
+        } catch (e) {
+          console.warn('Presence track error:', e);
+        }
+      }
+    });
 
-    // Wire WebRTC signaling delegate
+    // Wire WebRTC signaling delegate to broadcast through this realtime mesh
     WebRTCService.globalSignalingDelegate = (sig) => {
       this.sendSignalingMessage(sig);
     };
+  }
+
+  /**
+   * Broadcasts a chat message directly to the recipient over the active Realtime mesh
+   */
+  public async dispatchDirectMessage(recipientId: string, message: Message): Promise<boolean> {
+    const { isConfigured } = getSupabaseConfig();
+    if (!isConfigured) return false;
+
+    let broadcastOk = false;
+    if (this.meshChannel) {
+      try {
+        const res = await this.meshChannel.send({
+          type: 'broadcast',
+          event: 'chat_message',
+          payload: {
+            targetId: recipientId,
+            senderId: message.senderId,
+            senderDeviceId: message.senderDeviceId,
+            message,
+          },
+        });
+        broadcastOk = res === 'ok';
+      } catch (err) {
+        console.warn('Realtime mesh broadcast error', err);
+      }
+    }
+
+    // Persist to PostgreSQL database for persistent cloud mailbox storage
+    let persistedOk = false;
+    try {
+      await this.persistToDatabase(message);
+      persistedOk = true;
+    } catch (e: any) {
+      console.debug('Postgres write status:', e?.message || e);
+    }
+
+    // Message is dispatched if delivered over realtime mesh OR persisted to cloud mailbox
+    return broadcastOk || persistedOk;
+  }
+
+  /**
+   * Sends WebRTC signaling payload to recipient over active Realtime mesh
+   */
+  public async sendSignalingMessage(signal: SignalingMessage): Promise<void> {
+    const { isConfigured } = getSupabaseConfig();
+    if (!isConfigured || !this.meshChannel) return;
+
+    try {
+      await this.meshChannel.send({
+        type: 'broadcast',
+        event: 'webrtc_signal',
+        payload: signal,
+      });
+    } catch (err) {
+      console.warn('Error sending signaling over Supabase Realtime', err);
+    }
   }
 
   /**
@@ -183,75 +318,16 @@ export class SupabaseRealtimeService {
    */
   public async broadcastMeshEvent(eventPayload: any): Promise<void> {
     const { isConfigured } = getSupabaseConfig();
-    if (!isConfigured) return;
+    if (!isConfigured || !this.meshChannel) return;
 
     try {
-      const supabase = getSupabase();
-      const channel = supabase.channel('shongjog_mesh_events');
-      await channel.send({
+      await this.meshChannel.send({
         type: 'broadcast',
         event: 'mesh_action',
         payload: eventPayload,
       });
     } catch (err) {
       console.warn('Mesh event broadcast error', err);
-    }
-  }
-
-  /**
-   * Broadcasts a chat message directly to recipient's inbox channel
-   */
-  public async dispatchDirectMessage(recipientId: string, message: Message): Promise<boolean> {
-    const { isConfigured } = getSupabaseConfig();
-    if (!isConfigured) return false;
-
-    const supabase = getSupabase();
-    const recipientChannelName = `shongjog_inbox_${recipientId}`;
-    const targetChannel = supabase.channel(recipientChannelName);
-
-    try {
-      const res = await targetChannel.send({
-        type: 'broadcast',
-        event: 'chat_message',
-        payload: message,
-      });
-
-      // Also attempt async cloud persistence to PostgreSQL
-      this.persistToDatabase(message).catch((e) => {
-        console.debug('Postgres table write skipped (using Realtime WebSocket):', e.message);
-      });
-
-      return res === 'ok';
-    } catch (err) {
-      console.warn('Realtime dispatch error', err);
-      return false;
-    }
-  }
-
-  /**
-   * Sends WebRTC signaling payload to recipient
-   */
-  public async sendSignalingMessage(signal: SignalingMessage): Promise<void> {
-    const { isConfigured } = getSupabaseConfig();
-    if (!isConfigured) return;
-
-    const supabase = getSupabase();
-    const recipientChannelName = `shongjog_inbox_${signal.targetId}`;
-    const targetChannel = supabase.channel(recipientChannelName);
-
-    let eventName = 'webrtc_signal';
-    if (signal.type === 'call_request') eventName = 'call_request';
-    if (signal.type === 'call_response') eventName = 'call_response';
-    if (signal.type === 'call_end') eventName = 'call_end';
-
-    try {
-      await targetChannel.send({
-        type: 'broadcast',
-        event: eventName,
-        payload: signal,
-      });
-    } catch (err) {
-      console.warn('Error sending signaling over Supabase Realtime', err);
     }
   }
 
@@ -263,9 +339,11 @@ export class SupabaseRealtimeService {
     await db.put('messages', message);
 
     let conv = await db.get('conversations', message.conversationId);
-    let snippet = message.content;
+    let snippet = (message.content || '').replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim();
     if (message.type === 'voice') snippet = '🎙️ Voice note';
     if (message.type === 'file') snippet = `📎 ${message.media?.fileName || 'File'}`;
+    if (message.type === 'call_event') snippet = message.content ? message.content.replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim() : '📞 Call log';
+    snippet = snippet.slice(0, 100);
 
     if (conv) {
       conv.lastMessageSnippet = snippet;
@@ -287,9 +365,31 @@ export class SupabaseRealtimeService {
     }
   }
 
+  /**
+   * Broadcasts real-time typing indicator for the active conversation
+   */
+  public async sendTypingIndicator(conversationId: string, isTyping: boolean): Promise<void> {
+    if (this.meshChannel) {
+      try {
+        await this.meshChannel.send({
+          type: 'broadcast',
+          event: 'mesh_action',
+          payload: {
+            type: 'typing_indicator',
+            conversationId,
+            senderId: this.currentUserId,
+            isTyping,
+          },
+        });
+      } catch {
+        // safe broadcast
+      }
+    }
+  }
+
   private async persistToDatabase(message: Message): Promise<void> {
     const supabase = getSupabase();
-    await supabase.from('messages').insert({
+    await supabase.from('messages').upsert({
       id: message.id,
       conversation_id: message.conversationId,
       sender_id: message.senderId,

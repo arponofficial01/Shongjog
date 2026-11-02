@@ -4,32 +4,66 @@ import {
   ArrowLeft,
   ShieldCheck,
   AtSign,
-  Phone,
-  KeyRound,
   CheckCircle2,
   AlertCircle,
   RefreshCw,
   User,
   Camera,
   FileText,
+  Lock,
+  Sparkles,
+  Eye,
+  EyeOff,
+  Mail,
+  Smartphone,
 } from 'lucide-react';
 import { IdentityService } from '../services/identity/identityService';
 import { AuthService } from '../services/auth/authService';
 import type { UserProfile } from '../services/db/database';
+import { getDatabase } from '../services/db/database';
+import { getSupabaseConfig, getSupabase } from '../services/supabase/supabaseClient';
+import { BrandLogo } from './BrandLogo';
+import { LoginCinematicIntro } from './LoginCinematicIntro';
+import { RecoverySyncService } from '../services/sync/recoverySyncService';
+import { AccountSyncService } from '../services/sync/accountSyncService';
+import { DeviceSessionService } from '../services/auth/deviceSessionService';
 
 interface ProfileSetupModalProps {
   onProfileCreated: (profile: UserProfile) => void;
 }
 
-type AuthStep = 'phone' | 'otp' | 'profile';
+type AuthStep = 'phone' | 'otp' | 'profile' | 'set_password' | 'two_factor' | 'email_login';
 
 export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileCreated }) => {
+  const [showIntroAnimation, setShowIntroAnimation] = useState<boolean>(true);
   const [step, setStep] = useState<AuthStep>('phone');
-  
-  // Step 1: Phone
+
+  // Direct Email Login State
+  const [directEmailInput, setDirectEmailInput] = useState('');
+  const [directEmailOtpSent, setDirectEmailOtpSent] = useState(false);
+  const [directEmailOtpDigits, setDirectEmailOtpDigits] = useState(['', '', '', '', '', '']);
+  const [directEmailOtpLoading, setDirectEmailOtpLoading] = useState(false);
+  const [directEmailOtpTimer, setDirectEmailOtpTimer] = useState(0);
+  const directEmailInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Step 1: Phone & Auto Account Detection
   const [phoneInput, setPhoneInput] = useState('');
   const [detectedOperator, setDetectedOperator] = useState<string | null>(null);
   const [formattedPhone, setFormattedPhone] = useState('');
+  const [accountStatus, setAccountStatus] = useState<'idle' | 'checking' | 'existing' | 'new'>('idle');
+  const [existingUser, setExistingUser] = useState<UserProfile | null>(null);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [loginMode, setLoginMode] = useState<'password' | 'otp'>('password');
+  const [pendingExistingUser, setPendingExistingUser] = useState<UserProfile | null>(null);
+  const [setPasswordVal, setSetPasswordVal] = useState('');
+  const [confirmPasswordVal, setConfirmPasswordVal] = useState('');
+  const [showSetPasswordEye, setShowSetPasswordEye] = useState(false);
+
+  // Step 2FA: Two-Factor Authentication
+  const [pending2FAUser, setPending2FAUser] = useState<UserProfile | null>(null);
+  const [twoFactorDigits, setTwoFactorDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const [trustThisDevice, setTrustThisDevice] = useState<boolean>(true);
+  const twoFactorInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Step 2: OTP
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
@@ -40,19 +74,71 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
   const [canResend, setCanResend] = useState(false);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Step 3: Profile Setup (Name, Username, Avatar, Description/Bio)
+  // Step 3: Profile Setup (Name, Username, Password, Avatar, Description/Bio)
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [avatarUrl, setAvatarUrl] = useState<string>('');
   const [bio, setBio] = useState<string>('Available on Shongjog direct network');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Recovery Email Login States (Alternative to 2FA PIN / Authenticator)
+  const [recoveryEmailMode, setRecoveryEmailMode] = useState(false);
+  const [recoveryEmailInput, setRecoveryEmailInput] = useState('');
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailOtpDigits, setEmailOtpDigits] = useState(['', '', '', '', '', '']);
+  const [emailOtpLoading, setEmailOtpLoading] = useState(false);
+  const [emailOtpNotice, setEmailOtpNotice] = useState('');
+  const [recoveryEmailOtpTimer, setRecoveryEmailOtpTimer] = useState(0);
+  const emailOtpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Timers for OTP resend countdowns
+  useEffect(() => {
+    if (directEmailOtpTimer > 0) {
+      const t = setTimeout(() => setDirectEmailOtpTimer((prev) => prev - 1), 1000);
+      return () => clearTimeout(t);
+    }
+  }, [directEmailOtpTimer]);
+
+  useEffect(() => {
+    if (recoveryEmailOtpTimer > 0) {
+      const t = setTimeout(() => setRecoveryEmailOtpTimer((prev) => prev - 1), 1000);
+      return () => clearTimeout(t);
+    }
+  }, [recoveryEmailOtpTimer]);
+
+  // Prevent 2FA Bypass on Page Refresh: Restore pending state if page reloads during 2FA
+  useEffect(() => {
+    try {
+      const pendingJson = sessionStorage.getItem('shongjog_pending_2fa');
+      if (pendingJson) {
+        const parsed = JSON.parse(pendingJson) as UserProfile;
+        if (parsed && parsed.id) {
+          (async () => {
+            const status = await RecoverySyncService.getRecoveryPinStatus(parsed);
+            if (!status.hasPin) {
+              // 2FA has been removed from this account - complete login immediately
+              sessionStorage.removeItem('shongjog_pending_2fa');
+              IdentityService.activateSession(parsed.id);
+              DeviceSessionService.registerSession(parsed).catch(console.warn);
+              onProfileCreated(parsed);
+              return;
+            }
+            setPending2FAUser(parsed);
+            setFormattedPhone(parsed.phoneNumber || '');
+            setStep('two_factor');
+          })();
+        }
+      }
+    } catch {}
+  }, []);
+
   // Shared
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // Real-time phone operator detection
+  // Real-time phone operator detection & Account Status Lookup
   useEffect(() => {
     if (phoneInput.trim().length >= 3) {
       const val = IdentityService.validateBangladeshPhone(phoneInput);
@@ -60,11 +146,33 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         setDetectedOperator(val.operator);
         setFormattedPhone(val.formatted);
         setError('');
+        setAccountStatus('checking');
+
+        // Check if account already exists in Supabase or IndexedDB
+        IdentityService.checkAccountStatus(val.formatted).then((res) => {
+          if (res.exists && res.profile) {
+            setAccountStatus('existing');
+            setExistingUser(res.profile);
+            if (res.hasPassword) {
+              setLoginMode('password');
+            } else {
+              setLoginMode('otp');
+            }
+          } else {
+            setAccountStatus('new');
+            setExistingUser(null);
+            setLoginMode('otp');
+          }
+        });
       } else {
         setDetectedOperator(null);
+        setAccountStatus('idle');
+        setExistingUser(null);
       }
     } else {
       setDetectedOperator(null);
+      setAccountStatus('idle');
+      setExistingUser(null);
     }
   }, [phoneInput]);
 
@@ -89,7 +197,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
   useEffect(() => {
     const clean = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
     if (clean.length < 3) {
-      setUsernameStatus('idle');
+      setUsernameStatus((prev) => (prev !== 'idle' ? 'idle' : prev));
       return;
     }
 
@@ -98,7 +206,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       try {
         const available = await AuthService.isUsernameAvailable(clean);
         setUsernameStatus(available ? 'available' : 'taken');
-      } catch (e) {
+      } catch {
         setUsernameStatus('available');
       }
     }, 350);
@@ -124,9 +232,319 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
     reader.readAsDataURL(file);
   };
 
-  // --- Step 1: Send OTP ---
-  const handleSendOtp = async (e: React.FormEvent) => {
+  // --- Two-Factor Authentication (2FA) & Trust This Device ---
+  const handleSuccessfulLogin = async (user: UserProfile) => {
+    // If device is already marked as trusted, bypass 2FA immediately
+    const isTrusted = localStorage.getItem(`shongjog_trusted_device_${user.id}`) === 'true';
+    if (isTrusted) {
+      IdentityService.activateSession(user.id);
+      DeviceSessionService.registerSession(user).catch(console.warn);
+      onProfileCreated(user);
+      return;
+    }
+
+    // Check if 2FA has been disabled or removed on this account in cloud/settings
+    const pinStatus = await RecoverySyncService.getRecoveryPinStatus(user);
+    if (!pinStatus.hasPin) {
+      // No 2FA required on this account
+      sessionStorage.removeItem('shongjog_pending_2fa');
+      IdentityService.activateSession(user.id);
+      DeviceSessionService.registerSession(user).catch(console.warn);
+      onProfileCreated(user);
+      return;
+    }
+
+    // Persist pending 2FA state so page refresh keeps user strictly on 2FA (NO BYPASS)
+    sessionStorage.setItem('shongjog_pending_2fa', JSON.stringify(user));
+    setPending2FAUser(user);
+    setTwoFactorDigits(['', '', '', '', '', '']);
+    setTrustThisDevice(true);
+    setError('');
+    setRecoveryEmailMode(false);
+    setEmailOtpSent(false);
+    if (user.email) setRecoveryEmailInput(user.email);
+    setStep('two_factor');
+    setTimeout(() => twoFactorInputRefs.current[0]?.focus(), 150);
+  };
+
+  const handleTwoFactorChange = (index: number, value: string) => {
+    setError('');
+    const clean = value.replace(/\D/g, '');
+    if (!clean) {
+      const next = [...twoFactorDigits];
+      next[index] = '';
+      setTwoFactorDigits(next);
+      return;
+    }
+
+    if (clean.length === 1) {
+      const next = [...twoFactorDigits];
+      next[index] = clean;
+      setTwoFactorDigits(next);
+      if (index < 5) {
+        twoFactorInputRefs.current[index + 1]?.focus();
+      } else {
+        const full = next.join('');
+        if (full.length === 6) {
+          triggerVerify2FA(full);
+        }
+      }
+    } else {
+      const chars = clean.slice(0, 6).split('');
+      const next = [...twoFactorDigits];
+      chars.forEach((c, i) => {
+        if (i < 6) next[i] = c;
+      });
+      setTwoFactorDigits(next);
+      const focusIndex = Math.min(chars.length, 5);
+      twoFactorInputRefs.current[focusIndex]?.focus();
+      if (chars.length === 6) {
+        triggerVerify2FA(chars.join(''));
+      }
+    }
+  };
+
+  const triggerVerify2FA = async (codeToVerify?: string) => {
+    if (!pending2FAUser) return;
+    const fullPin = codeToVerify || twoFactorDigits.join('');
+    if (fullPin.length !== 6) {
+      setError('Please enter all 6 digits of your Two-Factor Security PIN.');
+      return;
+    }
+
+    setError('');
+    setIsLoading(true);
+    try {
+      const status = await RecoverySyncService.getRecoveryPinStatus(pending2FAUser);
+      if (status.hasPin) {
+        const isValid = await RecoverySyncService.verifyPin(pending2FAUser, fullPin);
+        if (!isValid) {
+          setError('Incorrect 6-digit Authenticator code or Security PIN. Please try again.');
+          setTwoFactorDigits(['', '', '', '', '', '']);
+          setTimeout(() => twoFactorInputRefs.current[0]?.focus(), 60);
+          setIsLoading(false);
+          return;
+        }
+      } else {
+        await RecoverySyncService.setRecoveryPin(pending2FAUser, fullPin);
+      }
+
+      // Sync all settings, chat lock PIN, and cloud profile to this device immediately
+      AccountSyncService.syncAllFromCloud(pending2FAUser).catch((err: any) => {
+        console.warn('Background sync on 2FA login notice:', err);
+      });
+
+      if (trustThisDevice) {
+        localStorage.setItem(`shongjog_trusted_device_${pending2FAUser.id}`, 'true');
+      }
+
+      // Activate session only AFTER 2FA passes (No refresh bypass)
+      IdentityService.activateSession(pending2FAUser.id);
+      DeviceSessionService.registerSession(pending2FAUser).catch(console.warn);
+      sessionStorage.removeItem('shongjog_pending_2fa');
+
+      onProfileCreated(pending2FAUser);
+    } catch (err: any) {
+      setError(err.message || 'Two-Factor verification failed.');
+      setTwoFactorDigits(['', '', '', '', '', '']);
+      setTimeout(() => twoFactorInputRefs.current[0]?.focus(), 60);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Direct Email OTP dispatch via Supabase Email
+  const handleSendDirectEmailOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const cleanEmail = directEmailInput.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    setError('');
+    setDirectEmailOtpLoading(true);
+    try {
+      const supabase = getSupabase();
+      const { error: sendErr } = await supabase.auth.signInWithOtp({
+        email: cleanEmail,
+      });
+      if (sendErr) {
+        throw new Error(sendErr.message || 'Failed to dispatch verification email via Supabase.');
+      }
+      setDirectEmailOtpSent(true);
+      setDirectEmailOtpTimer(60);
+      setDirectEmailOtpDigits(['', '', '', '', '', '']);
+      setTimeout(() => directEmailInputRefs.current[0]?.focus(), 120);
+    } catch (err: any) {
+      setError(err.message || 'Could not send verification email. Please check your connection.');
+    } finally {
+      setDirectEmailOtpLoading(false);
+    }
+  };
+
+  // Direct Email OTP verification & Sovereign Account Resolution
+  const handleVerifyDirectEmailOtp = async (codeToVerify?: string) => {
+    const code = codeToVerify || directEmailOtpDigits.join('');
+    if (code.length !== 6) {
+      setError('Please enter the 6-digit verification code.');
+      return;
+    }
+    setError('');
+    setDirectEmailOtpLoading(true);
+    try {
+      const cleanEmail = directEmailInput.trim().toLowerCase();
+      const supabase = getSupabase();
+      const { error: vErr } = await supabase.auth.verifyOtp({
+        email: cleanEmail,
+        token: code,
+        type: 'email',
+      });
+      if (vErr) {
+        throw new Error('Incorrect email verification code. Please check your inbox or spam folder.');
+      }
+
+      // Check if a profile exists on Supabase with this email (or bio)
+      let matchedProfile: UserProfile | null = null;
+      try {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('*')
+          .or(`email.eq.${cleanEmail},bio.ilike.%__email:${cleanEmail}%`)
+          .maybeSingle();
+
+        if (prof) {
+          matchedProfile = {
+            id: prof.id,
+            displayName: prof.display_name || 'Citizen',
+            username: prof.username || '',
+            phoneNumber: prof.phone_number || '',
+            avatarUrl: prof.avatar_url,
+            publicKey: prof.public_key,
+            email: cleanEmail,
+            bio: prof.bio,
+            createdAt: prof.created_at ? new Date(prof.created_at).getTime() : Date.now(),
+            recoveryPinHash: prof.recovery_pin_hash || undefined,
+            passwordHash: prof.password_hash || undefined,
+            deviceId: prof.device_id || 'web_' + Math.random().toString(36).substring(2, 10),
+            updatedAt: prof.updated_at ? new Date(prof.updated_at).getTime() : Date.now(),
+          };
+        }
+      } catch (err) {
+        console.warn('Could not query profile by email:', err);
+      }
+
+      if (matchedProfile) {
+        const db = await getDatabase();
+        await db.put('profiles', matchedProfile);
+        IdentityService.activateSession(matchedProfile.id);
+        DeviceSessionService.registerSession(matchedProfile).catch(console.warn);
+        AccountSyncService.syncAllFromCloud(matchedProfile).catch(console.warn);
+        onProfileCreated(matchedProfile);
+      } else {
+        // If new account via email, transition to profile setup with email stored
+        setStep('profile');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Verification failed. Please check the code and try again.');
+    } finally {
+      setDirectEmailOtpLoading(false);
+    }
+  };
+
+  // Recovery Email OTP dispatch via Supabase Email
+  const handleSendRecoveryEmailCode = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!recoveryEmailInput.trim() || !recoveryEmailInput.includes('@')) {
+      setError('Please enter a valid recovery email address.');
+      return;
+    }
+    setError('');
+    setEmailOtpLoading(true);
+    try {
+      const supabase = getSupabase();
+      const { error: sendErr } = await supabase.auth.signInWithOtp({
+        email: recoveryEmailInput.trim(),
+      });
+      if (sendErr) {
+        throw new Error(sendErr.message || 'Failed to dispatch verification email.');
+      }
+      setEmailOtpSent(true);
+      setRecoveryEmailOtpTimer(60);
+      setEmailOtpNotice(`6-digit verification code sent to ${recoveryEmailInput.trim()} via Supabase.`);
+      setEmailOtpDigits(['', '', '', '', '', '']);
+      setTimeout(() => emailOtpInputRefs.current[0]?.focus(), 100);
+    } catch (err: any) {
+      setError(err.message || 'Could not send verification email. Please check your address or try PIN.');
+    } finally {
+      setEmailOtpLoading(false);
+    }
+  };
+
+  // Recovery Email OTP verification
+  const handleVerifyRecoveryEmailCode = async (codeToVerify?: string) => {
+    const code = codeToVerify || emailOtpDigits.join('');
+    if (code.length !== 6) {
+      setError('Please enter the 6-digit code sent to your email.');
+      return;
+    }
+    setError('');
+    setEmailOtpLoading(true);
+    try {
+      const supabase = getSupabase();
+      const { error: vErr } = await supabase.auth.verifyOtp({
+        email: recoveryEmailInput.trim(),
+        token: code,
+        type: 'email',
+      });
+      if (vErr) {
+        throw new Error('Incorrect email verification code. Please check your inbox or spam folder.');
+      }
+
+      if (pending2FAUser) {
+        pending2FAUser.email = recoveryEmailInput.trim();
+        const db = await getDatabase();
+        await db.put('profiles', pending2FAUser);
+
+        IdentityService.activateSession(pending2FAUser.id);
+        DeviceSessionService.registerSession(pending2FAUser).catch(console.warn);
+        AccountSyncService.syncAllFromCloud(pending2FAUser).catch(console.warn);
+
+        if (trustThisDevice) {
+          localStorage.setItem(`shongjog_trusted_device_${pending2FAUser.id}`, 'true');
+        }
+        sessionStorage.removeItem('shongjog_pending_2fa');
+        onProfileCreated(pending2FAUser);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Email verification failed. Please try again.');
+    } finally {
+      setEmailOtpLoading(false);
+    }
+  };
+
+  // --- Password Sign In (ZERO SMS QUOTA USED) ---
+  const handlePasswordSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!passwordInput.trim()) {
+      setError('Please enter your account password.');
+      return;
+    }
+
+    setError('');
+    setIsLoading(true);
+    try {
+      const user = await IdentityService.loginWithPassword(formattedPhone, passwordInput);
+      await handleSuccessfulLogin(user);
+    } catch (err: any) {
+      setError(err.message || 'Incorrect password.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // --- Step 1: Send OTP (First-time or fallback) ---
+  const handleSendOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setError('');
 
     if (!navigator.onLine) {
@@ -207,9 +625,14 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       if (res.verified) {
         if (res.existingProfile) {
           // Returning user: automatically restored and signed in!
-          onProfileCreated(res.existingProfile);
+          if (!res.existingProfile.passwordHash) {
+            setPendingExistingUser(res.existingProfile);
+            setStep('set_password');
+          } else {
+            await handleSuccessfulLogin(res.existingProfile);
+          }
         } else {
-          // New citizen: proceed to name, avatar, username, and description step
+          // New citizen: proceed to name, avatar, username, password, and description step
           setStep('profile');
         }
       }
@@ -237,6 +660,63 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
     }
   };
 
+  // --- Step 4: Save Password for returning user who didn't set password ---
+  const handleSaveExistingUserPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!pendingExistingUser) return;
+
+    if (!setPasswordVal || setPasswordVal.length < 6) {
+      setError('Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (setPasswordVal !== confirmPasswordVal) {
+      setError('Passwords do not match. Please re-enter.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const passwordHash = await IdentityService.hashPassword(setPasswordVal.trim());
+      const updatedProfile: UserProfile = {
+        ...pendingExistingUser,
+        passwordHash,
+        updatedAt: Date.now(),
+      };
+
+      const db = await getDatabase();
+      await db.put('profiles', updatedProfile);
+
+      const { isConfigured } = getSupabaseConfig();
+      if (navigator.onLine && isConfigured) {
+        try {
+          const supabase = getSupabase();
+          await supabase.from('profiles').upsert({
+            id: updatedProfile.id,
+            username: updatedProfile.username,
+            display_name: updatedProfile.displayName,
+            avatar_url: updatedProfile.avatarUrl,
+            phone_number: updatedProfile.phoneNumber,
+            password_hash: passwordHash,
+            public_key: updatedProfile.publicKey,
+            device_id: updatedProfile.deviceId,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.warn('Could not sync password to Supabase', err);
+        }
+      }
+
+      await handleSuccessfulLogin(updatedProfile);
+    } catch (err: any) {
+      setError(err.message || 'Failed to set password.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // --- Step 3: Complete Profile & Sync to Supabase ---
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -258,6 +738,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       return;
     }
 
+    if (!newPassword || newPassword.length < 6) {
+      setError('Please create a password of at least 6 characters for fast future logins.');
+      return;
+    }
+
     setIsLoading(true);
     try {
       const profile = await IdentityService.setupProfile(
@@ -265,7 +750,8 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         cleanUsername,
         displayName.trim(),
         avatarUrl || undefined,
-        bio.trim() || undefined
+        bio.trim() || undefined,
+        newPassword
       );
       onProfileCreated(profile);
     } catch (err: any) {
@@ -275,52 +761,26 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
     }
   };
 
+  if (showIntroAnimation) {
+    return <LoginCinematicIntro onComplete={() => setShowIntroAnimation(false)} />;
+  }
+
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: 'rgba(5, 8, 13, 0.95)',
-        backdropFilter: 'blur(36px)',
-        zIndex: 100,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '20px',
-      }}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: '490px',
-          background: 'rgba(12, 19, 32, 0.94)',
-          border: '1px solid var(--border-glass-bright)',
-          borderRadius: '26px',
-          padding: '36px 32px',
-          boxShadow: '0 28px 70px rgba(0, 0, 0, 0.85), 0 0 35px var(--accent-glow)',
-          textAlign: 'center',
-          animation: 'call-fade 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
-          position: 'relative',
-        }}
-      >
-        {/* Header Icon */}
-        <div
-          style={{
-            width: 68,
-            height: 68,
-            borderRadius: '20px',
-            background: 'linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%)',
-            margin: '0 auto 16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'white',
-            boxShadow: '0 8px 30px rgba(16, 185, 129, 0.45)',
-          }}
-        >
-          {step === 'phone' && <Phone size={32} />}
-          {step === 'otp' && <KeyRound size={32} />}
-          {step === 'profile' && <User size={32} />}
+    <div className="cinema-login-stage">
+      {/* Video-Style Dynamic Ambient Background */}
+      <div className="cinema-backdrop-canvas" aria-hidden="true">
+        <div className="cinema-ambient-orb cinema-orb-1" />
+        <div className="cinema-ambient-orb cinema-orb-2" />
+        <div className="cinema-ambient-orb cinema-orb-3" />
+        <div className="cinema-mesh-grid" />
+      </div>
+
+      <div className="cinema-card-shell">
+        {/* Header Icon with Pulsing Halo */}
+        <div className="cinema-logo-beacon">
+          <div className="cinema-logo-beacon-inner">
+            <BrandLogo size={58} />
+          </div>
         </div>
 
         <h1
@@ -328,22 +788,32 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
             fontFamily: 'var(--font-display)',
             fontSize: '25px',
             fontWeight: 700,
-            color: '#ffffff',
+            color: 'var(--text-pure)',
             letterSpacing: '-0.5px',
             margin: '0 0 4px 0',
           }}
         >
-          Shongjog <span style={{ fontFamily: 'var(--font-bangla)', color: 'var(--accent-light)', fontSize: '20px' }}>সংযোগ</span>
+          Shongjog <span style={{ fontFamily: 'var(--font-bangla)', color: 'var(--accent-light)', fontSize: '20px' }}>{'\u09B8\u0982\u09AF\u09CB\u0997'}</span>
         </h1>
 
-        <p style={{ fontSize: '13px', color: '#94a3b8', lineHeight: 1.5, marginBottom: 20 }}>
-          {step === 'phone' && 'National Secure Communication Network. Enter your Bangladeshi mobile number.'}
+        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 20 }}>
+          {step === 'phone' && (
+            accountStatus === 'existing' && loginMode === 'password'
+              ? `Welcome back, ${existingUser?.displayName || 'Citizen'}! Sign in with your password.`
+              : 'Enter your Bangladeshi mobile number to continue.'
+          )}
           {step === 'otp' && `Enter the 6-digit verification code sent to ${formattedPhone}`}
-          {step === 'profile' && 'Set up your citizen profile picture, username, and description.'}
+          {step === 'profile' && 'Create your citizen profile picture, username, and account password.'}
+          {step === 'two_factor' && 'Two-Factor Authentication required for this device.'}
+          {step === 'email_login' && (
+            directEmailOtpSent
+              ? `Enter the 6-digit verification code sent to ${directEmailInput}`
+              : 'Sign in to your sovereign account using your registered email.'
+          )}
         </p>
 
         {/* Global Error Banner */}
-        {error && (
+        {error && step !== 'two_factor' && (
           <div
             style={{
               padding: '11px 14px',
@@ -365,10 +835,10 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         )}
 
         {/* =========================================================================
-            STEP 1: PHONE NUMBER INPUT (FIXED INTEGRATED LAYOUT - ZERO OVERLAP)
+            STEP 1: PHONE NUMBER INPUT + AUTO-DETECT (PASSWORD / OTP)
             ========================================================================= */}
         {step === 'phone' && (
-          <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left' }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                 <label style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--accent-light)', letterSpacing: '0.4px' }}>
@@ -391,7 +861,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                 )}
               </div>
 
-              {/* Integrated Unbreakable Phone Input Box */}
+              {/* Integrated Phone Input Box */}
               <div
                 style={{
                   display: 'flex',
@@ -427,7 +897,6 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                   placeholder="1712 345678"
                   value={phoneInput}
                   onChange={(e) => {
-                    // Strip non-digits and strip leading zero since +880 is already prefixed
                     const digits = e.target.value.replace(/[^0-9]/g, '');
                     setPhoneInput(digits.replace(/^0+/, ''));
                   }}
@@ -448,27 +917,346 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                 />
               </div>
 
-              <div style={{ fontSize: '11px', color: '#64748b', marginTop: 5 }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 5 }}>
                 Enter without leading 0. Supports GP (17/13), Robi (18), Banglalink (19/14), Airtel (16), Teletalk (15).
               </div>
             </div>
 
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="primary-action-btn-lux"
-              style={{
-                marginTop: 6,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-              }}
-            >
-              <span>{isLoading ? 'Verifying Network...' : 'Send Verification Code'}</span>
-              <ArrowRight size={18} />
-            </button>
-          </form>
+            {/* Account Detection Status Badge */}
+            {accountStatus === 'existing' && (
+              <div
+                style={{
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  borderRadius: '10px',
+                  padding: '9px 12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <CheckCircle2 size={16} color="var(--accent-light)" />
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--accent-light)' }}>
+                    Existing Account: {existingUser?.displayName || 'Citizen'}
+                  </span>
+                </div>
+                <span
+                  style={{
+                    fontSize: '10.5px',
+                    color: 'var(--text-primary)',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    padding: '2px 7px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  ⚡ Instant Sign In
+                </span>
+              </div>
+            )}
+
+            {accountStatus === 'new' && (
+              <div
+                style={{
+                  background: 'rgba(59, 130, 246, 0.12)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                  borderRadius: '10px',
+                  padding: '9px 12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <Sparkles size={15} color="#60a5fa" />
+                <span style={{ fontSize: '12.5px', color: '#93c5fd', fontWeight: 600 }}>
+                  New Account Registration (First-time verification)
+                </span>
+              </div>
+            )}
+
+            {/* Mode A: Existing Account Password Sign In */}
+            {accountStatus === 'existing' && loginMode === 'password' ? (
+              <form onSubmit={handlePasswordSignIn} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', display: 'block', marginBottom: 5 }}>
+                    ACCOUNT PASSWORD
+                  </label>
+                  <div className="input-prefix-wrapper">
+                    <span className="input-prefix-symbol">
+                      <Lock size={16} />
+                    </span>
+                    <input
+                      type="password"
+                      placeholder="Enter your account password"
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      className="lux-form-input has-prefix"
+                      required
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="primary-action-btn-lux"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <span>{isLoading ? 'Verifying Password...' : 'Sign In with Password'}</span>
+                  <ArrowRight size={18} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSendOtp()}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    textAlign: 'center',
+                    marginTop: 2,
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Forgot password? Log in with SMS OTP instead
+                </button>
+              </form>
+            ) : (
+              /* Mode B: Send SMS OTP (New users or Forgot Password) */
+              <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="primary-action-btn-lux"
+                  style={{
+                    marginTop: 6,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <span>{isLoading ? 'Verifying Network...' : 'Send Verification Code'}</span>
+                  <ArrowRight size={18} />
+                </button>
+
+                {accountStatus === 'existing' && (
+                  <button
+                    type="button"
+                    onClick={() => setLoginMode('password')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--accent-light)',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                  >
+                  ← Sign in with password instead
+                  </button>
+                )}
+              </form>
+            )}
+
+            {/* Direct Email Login Alternative Trigger */}
+            <div style={{ textAlign: 'center', marginTop: 8, paddingTop: 10, borderTop: '1px solid var(--border-glass, rgba(148, 163, 184, 0.15))' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep('email_login');
+                  setError('');
+                  setDirectEmailOtpSent(false);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--accent-light, #10b981)',
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  padding: '4px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <Mail size={14} />
+                <span>Or sign in with Email Verification Code</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            DIRECT EMAIL LOGIN: REAL SUPABASE OTP VIA EMAIL
+            ========================================================================= */}
+        {step === 'email_login' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left' }}>
+            <div style={{ textAlign: 'center', marginBottom: 2 }}>
+              <div style={{ fontSize: '15.5px', fontWeight: 700, color: 'var(--text-pure)', marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <Mail size={20} color="#10b981" />
+                <span>Email Authentication</span>
+              </div>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+                {directEmailOtpSent
+                  ? `Enter the 6-digit code dispatched to ${directEmailInput}`
+                  : 'Receive a real-time cryptographic verification token directly to your inbox.'}
+              </p>
+            </div>
+
+            {!directEmailOtpSent ? (
+              <form onSubmit={handleSendDirectEmailOtp} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-light, #10b981)', display: 'block', marginBottom: 6, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
+                    Email Address
+                  </label>
+                  <div className="input-prefix-wrapper" style={{ position: 'relative' }}>
+                    <span className="input-prefix-symbol" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#10b981', display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+                      <Mail size={16} />
+                    </span>
+                    <input
+                      type="email"
+                      value={directEmailInput}
+                      onChange={(e) => {
+                        setDirectEmailInput(e.target.value);
+                        setError('');
+                      }}
+                      placeholder="e.g. arponofficial01@gmail.com"
+                      className="lux-form-input has-prefix"
+                      style={{ paddingLeft: '44px' }}
+                      required
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={directEmailOtpLoading || !directEmailInput.trim() || !directEmailInput.includes('@')}
+                  className="primary-action-btn-lux"
+                  style={{ marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  <span>{directEmailOtpLoading ? 'Dispatching Email Code...' : 'Send Verification Code'}</span>
+                  <ArrowRight size={17} />
+                </button>
+
+                <div style={{ textAlign: 'center', marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep('phone');
+                      setError('');
+                    }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '12px', cursor: 'pointer', padding: 4 }}
+                  >
+                    ← Back to Phone Number Sign In
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.28)', borderRadius: 12, padding: '10px 14px', fontSize: '12.5px', color: '#6ee7b7', textAlign: 'center' }}>
+                  6-digit verification code sent to <strong>{directEmailInput}</strong> via Supabase
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+                  {directEmailOtpDigits.map((digit, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => {
+                        directEmailInputRefs.current[i] = el;
+                      }}
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={1}
+                      value={digit}
+                      disabled={directEmailOtpLoading}
+                      onChange={(e) => {
+                        setError('');
+                        const val = e.target.value.replace(/\D/g, '').slice(-1);
+                        const next = [...directEmailOtpDigits];
+                        next[i] = val;
+                        setDirectEmailOtpDigits(next);
+                        if (val && i < 5) {
+                          directEmailInputRefs.current[i + 1]?.focus();
+                        }
+                        if (next.every((d) => d.length === 1)) {
+                          handleVerifyDirectEmailOtp(next.join(''));
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Backspace' && !directEmailOtpDigits[i] && i > 0) {
+                          directEmailInputRefs.current[i - 1]?.focus();
+                        }
+                      }}
+                      style={{
+                        width: '46px',
+                        height: '52px',
+                        borderRadius: '12px',
+                        backgroundColor: digit ? 'rgba(16, 185, 129, 0.14)' : 'var(--bg-input, rgba(148, 163, 184, 0.08))',
+                        border: digit ? '2px solid #10b981' : '1px solid var(--border-color, rgba(148, 163, 184, 0.28))',
+                        color: 'var(--text-pure)',
+                        fontSize: '22px',
+                        fontWeight: 700,
+                        textAlign: 'center',
+                        outline: 'none',
+                        transition: 'all 0.15s ease',
+                      }}
+                    />
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={directEmailOtpLoading || directEmailOtpDigits.some((d) => !d)}
+                  onClick={() => handleVerifyDirectEmailOtp()}
+                  className="primary-action-btn-lux"
+                  style={{ marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  <span>{directEmailOtpLoading ? 'Verifying Code...' : 'Verify Code & Sign In'}</span>
+                  <CheckCircle2 size={17} />
+                </button>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, fontSize: '12px' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDirectEmailOtpSent(false);
+                      setError('');
+                    }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}
+                  >
+                    ← Change Email
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSendDirectEmailOtp}
+                    disabled={directEmailOtpLoading || directEmailOtpTimer > 0}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: directEmailOtpTimer > 0 ? 'var(--text-secondary)' : '#10b981',
+                      fontWeight: 600,
+                      cursor: directEmailOtpTimer > 0 ? 'default' : 'pointer',
+                      padding: 2,
+                    }}
+                  >
+                    {directEmailOtpTimer > 0 ? `Resend in ${directEmailOtpTimer}s` : 'Resend code'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* =========================================================================
@@ -492,12 +1280,12 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                   textAlign: 'left',
                 }}
               >
-                <span style={{ fontSize: '20px' }}>📱</span>
+                <Smartphone size={22} color="var(--accent-light, #10b981)" style={{ flexShrink: 0 }} />
                 <div>
                   <div style={{ fontWeight: 600, color: 'var(--accent-light)' }}>
                     Real SMS Sent to {formattedPhone}
                   </div>
-                  <div style={{ color: '#94a3b8', fontSize: '11.5px', marginTop: 2 }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '11.5px', marginTop: 2 }}>
                     Please check your mobile text messages for the 6-digit verification code.
                   </div>
                 </div>
@@ -517,15 +1305,14 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                   <span style={{ fontWeight: 600, color: '#fde047' }}>
-                    Supabase SMS Gateway Notice
+                    Free OTP Verification Mode
                   </span>
-                  <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
-                    Code: <strong style={{ color: 'var(--accent-light)', fontFamily: 'monospace', fontSize: '13px' }}>{devOtpNotification}</strong>
+                  <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                    Code: <strong style={{ color: 'var(--accent-light)', fontFamily: 'monospace', fontSize: '14px', letterSpacing: '1px' }}>{devOtpNotification}</strong>
                   </span>
                 </div>
-                <div style={{ color: '#94a3b8', fontSize: '11px', lineHeight: 1.4 }}>
-                  {smsNotice ? `${smsNotice}. ` : ''}
-                  To dispatch telecom SMS to physical phones, activate Twilio in <em>Supabase Dashboard → Authentication → Providers → Phone</em>.
+                <div style={{ color: 'var(--text-secondary)', fontSize: '11px', lineHeight: 1.4 }}>
+                  {smsNotice || 'Enter the 6-digit confirmation code displayed above to complete citizen verification.'}
                 </div>
               </div>
             )}
@@ -560,10 +1347,9 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                     textAlign: 'center',
                     fontSize: '22px',
                     fontWeight: 700,
-                    color: 'white',
-                    fontFamily: 'monospace',
-                    boxShadow: digit ? '0 0 12px var(--accent-glow)' : 'none',
-                    transition: 'all 0.15s ease',
+                    color: 'var(--text-pure)',
+                    outline: 'none',
+                    transition: 'all 0.2s ease',
                   }}
                 />
               ))}
@@ -575,7 +1361,6 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               onClick={() => triggerVerifyOtp()}
               className="primary-action-btn-lux"
               style={{
-                width: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -597,7 +1382,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#94a3b8',
+                  color: 'var(--text-secondary)',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -630,8 +1415,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
           </div>
         )}
 
+        {/* Firebase Phone Auth invisible reCAPTCHA DOM target */}
+        <div id="recaptcha-container" style={{ display: 'none' }}></div>
+
         {/* =========================================================================
-            STEP 3: PROFILE IDENTITY & DESCRIPTION (SYNCED TO SUPABASE)
+            STEP 3: PROFILE IDENTITY & PASSWORD (SAVED FOR ZERO-QUOTA FUTURE LOGINS)
             ========================================================================= */}
         {step === 'profile' && (
           <form onSubmit={handleProfileSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14, textAlign: 'left' }}>
@@ -644,47 +1432,33 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                 style={{ display: 'none' }}
                 onChange={handleAvatarSelected}
               />
-              
               <div
-                onClick={() => fileInputRef.current?.click()}
                 style={{
-                  width: 72,
-                  height: 72,
-                  borderRadius: '18px',
-                  background: avatarUrl ? `url(${avatarUrl}) center/cover no-repeat` : 'var(--brand-orb-grad)',
-                  border: '2px solid var(--accent-light)',
-                  boxShadow: '0 4px 18px var(--accent-glow)',
-                  cursor: 'pointer',
+                  width: 64,
+                  height: 64,
+                  borderRadius: '16px',
+                  background: 'var(--brand-orb-grad)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: 'white',
                   fontSize: '26px',
+                  color: 'white',
                   fontWeight: 700,
+                  overflow: 'hidden',
                   position: 'relative',
+                  boxShadow: '0 4px 18px var(--accent-glow)',
+                  border: '1.5px solid var(--border-glass-bright)',
+                  cursor: 'pointer',
                   flexShrink: 0,
                 }}
-                title="Click to change photo"
+                onClick={() => fileInputRef.current?.click()}
+                title="Upload Profile Picture"
               >
-                {!avatarUrl && (displayName ? displayName.charAt(0).toUpperCase() : <User size={30} />)}
-                <div
-                  style={{
-                    position: 'absolute',
-                    bottom: -3,
-                    right: -3,
-                    width: 24,
-                    height: 24,
-                    borderRadius: '50%',
-                    background: 'var(--accent-main)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#05080d',
-                    boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
-                  }}
-                >
-                  <Camera size={13} />
-                </div>
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  displayName.charAt(0).toUpperCase() || <Camera size={24} />
+                )}
               </div>
 
               <div>
@@ -692,59 +1466,59 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   style={{
-                    padding: '6px 14px',
-                    borderRadius: '8px',
-                    background: 'rgba(255, 255, 255, 0.06)',
+                    background: 'rgba(255, 255, 255, 0.08)',
                     border: '1px solid var(--border-glass)',
-                    color: '#f8fafc',
-                    fontSize: '12.5px',
-                    fontWeight: 600,
+                    borderRadius: '8px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    color: 'var(--text-pure)',
                     cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    marginBottom: 4,
+                    fontWeight: 500,
                   }}
                 >
-                  <Camera size={14} color="var(--accent-light)" />
-                  <span>{avatarUrl ? 'Change Photo' : 'Upload Photo'}</span>
+                  Choose Photo
                 </button>
-                <div style={{ fontSize: '11px', color: '#64748b' }}>
-                  PNG, JPG or WebP (under 2MB)
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 4 }}>
+                  JPG, PNG or WEBP under 2MB
                 </div>
               </div>
             </div>
 
-            {/* Full Name */}
+            {/* Display Name */}
             <div>
               <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', display: 'block', marginBottom: 5, letterSpacing: '0.4px' }}>
-                FULL NAME
+                FULL CITIZEN NAME
               </label>
-              <input
-                type="text"
-                placeholder="e.g. Tanvir Ahmed"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="lux-form-input"
-                required
-                autoFocus
-              />
+              <div className="input-prefix-wrapper">
+                <span className="input-prefix-symbol">
+                  <User size={16} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="e.g. Tanvir Ahmed"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="lux-form-input has-prefix"
+                  required
+                  autoFocus
+                />
+              </div>
             </div>
 
-            {/* Username */}
+            {/* Username (@Handle) */}
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
                 <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', letterSpacing: '0.4px' }}>
                   UNIQUE USERNAME (@HANDLE)
                 </label>
                 {usernameStatus === 'checking' && (
-                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>Checking Supabase...</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Checking...</span>
                 )}
                 {usernameStatus === 'available' && (
                   <span style={{ fontSize: '11px', color: 'var(--accent-light)', fontWeight: 600 }}>✓ Available</span>
                 )}
                 {usernameStatus === 'taken' && (
-                  <span style={{ fontSize: '11px', color: 'var(--rose-danger)', fontWeight: 600 }}>✗ Already Taken</span>
+                  <span style={{ fontSize: '11px', color: 'var(--rose-danger)', fontWeight: 600 }}>✕ Already Taken</span>
                 )}
               </div>
 
@@ -760,6 +1534,29 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                   className="lux-form-input has-prefix"
                   required
                 />
+              </div>
+            </div>
+
+            {/* Create Password */}
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', display: 'block', marginBottom: 5, letterSpacing: '0.4px' }}>
+                CREATE ACCOUNT PASSWORD
+              </label>
+              <div className="input-prefix-wrapper">
+                <span className="input-prefix-symbol">
+                  <Lock size={16} />
+                </span>
+                <input
+                  type="password"
+                  placeholder="Set a password (min 6 characters)"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="lux-form-input has-prefix"
+                  required
+                />
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 4 }}>
+                Allows you to log in securely anytime with your password and two-factor protection.
               </div>
             </div>
 
@@ -794,8 +1591,547 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                 gap: 8,
               }}
             >
-              <span>{isLoading ? 'Syncing to Supabase Cloud...' : 'Complete Profile & Launch'}</span>
+              <span>{isLoading ? 'Setting up profile...' : 'Complete Profile & Launch'}</span>
               <ArrowRight size={18} />
+            </button>
+          </form>
+        )}
+
+        {/* =========================================================================
+            STEP 4: MANDATORY PASSWORD SETUP FOR RESTORED / RETURNING CITIZENS
+            ========================================================================= */}
+        {step === 'set_password' && pendingExistingUser && (
+          <form onSubmit={handleSaveExistingUserPassword} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div
+              className="cinema-welcome-card"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '12px 14px',
+                borderRadius: '14px',
+                background: 'rgba(16, 185, 129, 0.12)',
+                border: '1.5px solid rgba(16, 185, 129, 0.35)',
+                marginBottom: 4,
+              }}
+            >
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: '50%',
+                  overflow: 'hidden',
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  fontSize: '18px',
+                  flexShrink: 0,
+                }}
+              >
+                {pendingExistingUser.avatarUrl ? (
+                  <img src={pendingExistingUser.avatarUrl} alt={pendingExistingUser.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  pendingExistingUser.displayName.charAt(0).toUpperCase()
+                )}
+              </div>
+              <div style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-pure, #0f172a)' }}>
+                  Welcome back, <span style={{ color: '#10b981' }}>{pendingExistingUser.displayName}</span>!
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary, #64748b)', fontWeight: 600, marginTop: 2 }}>
+                  @{pendingExistingUser.username} • {pendingExistingUser.phoneNumber}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: 'rgba(245, 158, 11, 0.14)',
+                border: '1.5px solid rgba(245, 158, 11, 0.45)',
+                borderRadius: '12px',
+                padding: '11px 14px',
+                fontSize: '12.5px',
+                lineHeight: 1.45,
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                textAlign: 'left',
+              }}
+            >
+              <span style={{ fontSize: '16px', lineHeight: 1, flexShrink: 0 }}>🛡️</span>
+              <div>
+                <strong style={{ color: '#d97706', fontWeight: 700 }}>Password Required:</strong>{' '}
+                <span style={{ color: '#b45309', fontWeight: 600 }}>
+                  You don&apos;t have a password set yet. Please set your account password now for secure instant access.
+                </span>
+              </div>
+            </div>
+
+            {/* Password input */}
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-light, #10b981)', display: 'block', marginBottom: 6, letterSpacing: '0.4px', textAlign: 'left', textTransform: 'uppercase' }}>
+                New Account Password (min 6 characters)
+              </label>
+              <div className="input-prefix-wrapper">
+                <span className="input-prefix-symbol">
+                  <Lock size={16} />
+                </span>
+                <input
+                  type={showSetPasswordEye ? 'text' : 'password'}
+                  placeholder="Set your account password"
+                  value={setPasswordVal}
+                  onChange={(e) => setSetPasswordVal(e.target.value)}
+                  className="lux-form-input has-prefix"
+                  required
+                  minLength={6}
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSetPasswordEye(!showSetPasswordEye)}
+                  style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 4, zIndex: 2 }}
+                >
+                  {showSetPasswordEye ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Confirm Password input */}
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-light, #10b981)', display: 'block', marginBottom: 6, letterSpacing: '0.4px', textAlign: 'left', textTransform: 'uppercase' }}>
+                Confirm Password
+              </label>
+              <div className="input-prefix-wrapper">
+                <span className="input-prefix-symbol">
+                  <Lock size={16} />
+                </span>
+                <input
+                  type={showSetPasswordEye ? 'text' : 'password'}
+                  placeholder="Confirm your password"
+                  value={confirmPasswordVal}
+                  onChange={(e) => setConfirmPasswordVal(e.target.value)}
+                  className="lux-form-input has-prefix"
+                  required
+                  minLength={6}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading || !setPasswordVal || !confirmPasswordVal}
+              className="primary-action-btn-lux"
+              style={{
+                marginTop: 6,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              <span>{isLoading ? 'Securing account...' : 'Set Password & Enter App'}</span>
+              <ArrowRight size={18} />
+            </button>
+          </form>
+        )}
+
+        {/* =========================================================================
+            STEP 5: TWO-FACTOR AUTHENTICATION & TRUST THIS DEVICE
+            ========================================================================= */}
+        {step === 'two_factor' && pending2FAUser && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              triggerVerify2FA();
+            }}
+            style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '12px 14px',
+                borderRadius: '14px',
+                background: 'rgba(16, 185, 129, 0.08)',
+                border: '1px solid rgba(16, 185, 129, 0.25)',
+              }}
+            >
+              <div
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: '50%',
+                  overflow: 'hidden',
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  fontSize: '18px',
+                  flexShrink: 0,
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)',
+                }}
+              >
+                {pending2FAUser.avatarUrl ? (
+                  <img src={pending2FAUser.avatarUrl} alt={pending2FAUser.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  pending2FAUser.displayName.charAt(0).toUpperCase()
+                )}
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-pure)' }}>
+                  {pending2FAUser.displayName}
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--accent-light, #10b981)', fontWeight: 600 }}>
+                  @{pending2FAUser.username} • {pending2FAUser.phoneNumber}
+                </div>
+              </div>
+            </div>
+
+            {!recoveryEmailMode ? (
+              <>
+                <div style={{ textAlign: 'center', marginTop: 4 }}>
+                  <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-pure)', marginBottom: 4 }}>
+                    Two-Factor Security Verification
+                  </div>
+                  <p style={{ fontSize: '12.5px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+                    Enter your 6-digit Authenticator code (or Security PIN) to verify your login on this device.
+                  </p>
+                </div>
+
+                {/* 6 Digit Input Boxes */}
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 8, margin: '8px 0' }}>
+                  {twoFactorDigits.map((digit, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => {
+                        twoFactorInputRefs.current[i] = el;
+                      }}
+                      type="password"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={1}
+                      value={digit}
+                      disabled={isLoading}
+                      onChange={(e) => handleTwoFactorChange(i, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Backspace' && !twoFactorDigits[i] && i > 0) {
+                          twoFactorInputRefs.current[i - 1]?.focus();
+                        }
+                      }}
+                      style={{
+                        width: '46px',
+                        height: '54px',
+                        borderRadius: '12px',
+                        backgroundColor: digit ? 'rgba(16, 185, 129, 0.12)' : 'var(--bg-input, rgba(148, 163, 184, 0.08))',
+                        border: digit ? '2px solid var(--accent-main, #10b981)' : '1px solid var(--border-color, rgba(148, 163, 184, 0.28))',
+                        color: 'var(--text-pure)',
+                        fontSize: '24px',
+                        fontWeight: 700,
+                        textAlign: 'center',
+                        outline: 'none',
+                        transition: 'all 0.18s ease',
+                        boxShadow: digit ? '0 0 12px rgba(16, 185, 129, 0.25)' : 'none',
+                      }}
+                    />
+                  ))}
+                </div>
+
+                {/* Prominent High-Contrast Red Error Alert */}
+                {error && (
+                  <div
+                    style={{
+                      padding: '11px 16px',
+                      backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                      border: '1.5px solid #ef4444',
+                      borderRadius: '12px',
+                      color: '#ef4444',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      textAlign: 'center',
+                      boxShadow: '0 2px 10px rgba(239, 68, 68, 0.15)',
+                    }}
+                  >
+                    <AlertCircle size={16} color="#ef4444" style={{ flexShrink: 0 }} />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                {/* Trust this device checkbox */}
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    cursor: 'pointer',
+                    padding: '11px 14px',
+                    borderRadius: '12px',
+                    background: 'var(--bg-secondary, rgba(148, 163, 184, 0.06))',
+                    border: '1px solid var(--border-color, rgba(148, 163, 184, 0.18))',
+                    fontSize: '13px',
+                    color: 'var(--text-pure)',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={trustThisDevice}
+                    onChange={(e) => setTrustThisDevice(e.target.checked)}
+                    style={{
+                      width: '18px',
+                      height: '18px',
+                      accentColor: '#10b981',
+                      cursor: 'pointer',
+                    }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: 'var(--text-pure)' }}>Trust this device</div>
+                    <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                      Skip two-factor verification on this device in the future
+                    </div>
+                  </div>
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || twoFactorDigits.join('').length !== 6}
+                  className="primary-action-btn-lux"
+                  style={{
+                    marginTop: 6,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <span>{isLoading ? 'Verifying PIN...' : 'Verify & Continue'}</span>
+                  <ArrowRight size={18} />
+                </button>
+
+                {/* Alternative: Recovery Email Login Option */}
+                <div style={{ textAlign: 'center', marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecoveryEmailMode(true);
+                      setError('');
+                      if (pending2FAUser.email) {
+                        setRecoveryEmailInput(pending2FAUser.email);
+                      }
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--accent-light, #10b981)',
+                      fontSize: '12.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      padding: '4px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <Mail size={14} />
+                    <span>Lost authenticator? Verify via Recovery Email</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Recovery Email Verification Mode */
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ textAlign: 'center', marginTop: 2 }}>
+                  <div style={{ fontSize: '15.5px', fontWeight: 700, color: 'var(--text-pure)', marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <Mail size={18} color="#10b981" />
+                    <span>Recovery Email Verification</span>
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+                    Receive a secure verification code directly to your email via Supabase.
+                  </p>
+                </div>
+
+                {!emailOtpSent ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div>
+                      <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-light)', display: 'block', marginBottom: 5 }}>
+                        RECOVERY EMAIL ADDRESS
+                      </label>
+                      <div className="input-prefix-wrapper">
+                        <span className="input-prefix-symbol">
+                          <Mail size={16} />
+                        </span>
+                        <input
+                          type="email"
+                          value={recoveryEmailInput}
+                          onChange={(e) => {
+                            setRecoveryEmailInput(e.target.value);
+                            setError('');
+                          }}
+                          placeholder="e.g. yourname@gmail.com"
+                          className="lux-form-input has-prefix"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    {error && (
+                      <div style={{ padding: '9px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1.5px solid #ef4444', borderRadius: '10px', color: '#ef4444', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <AlertCircle size={15} color="#ef4444" />
+                        <span>{error}</span>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={emailOtpLoading || !recoveryEmailInput.trim() || !recoveryEmailInput.includes('@')}
+                      onClick={handleSendRecoveryEmailCode}
+                      className="primary-action-btn-lux"
+                      style={{ marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                    >
+                      <span>{emailOtpLoading ? 'Sending Email Code...' : 'Send Verification Code'}</span>
+                      <ArrowRight size={17} />
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: 10, padding: '9px 12px', fontSize: '12px', color: '#6ee7b7', textAlign: 'center' }}>
+                      {emailOtpNotice || `Verification code sent to ${recoveryEmailInput}`}
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+                      {emailOtpDigits.map((digit, i) => (
+                        <input
+                          key={i}
+                          ref={(el) => {
+                            emailOtpInputRefs.current[i] = el;
+                          }}
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={1}
+                          value={digit}
+                          disabled={emailOtpLoading}
+                          onChange={(e) => {
+                            setError('');
+                            const val = e.target.value.replace(/\D/g, '').slice(-1);
+                            const next = [...emailOtpDigits];
+                            next[i] = val;
+                            setEmailOtpDigits(next);
+                            if (val && i < 5) {
+                              emailOtpInputRefs.current[i + 1]?.focus();
+                            }
+                            if (next.every((d) => d.length === 1)) {
+                              handleVerifyRecoveryEmailCode(next.join(''));
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Backspace' && !emailOtpDigits[i] && i > 0) {
+                              emailOtpInputRefs.current[i - 1]?.focus();
+                            }
+                          }}
+                          style={{
+                            width: '46px',
+                            height: '52px',
+                            borderRadius: '12px',
+                            backgroundColor: digit ? 'rgba(16, 185, 129, 0.12)' : 'var(--bg-input, rgba(148, 163, 184, 0.08))',
+                            border: digit ? '2px solid #10b981' : '1px solid var(--border-color, rgba(148, 163, 184, 0.28))',
+                            color: 'var(--text-pure)',
+                            fontSize: '22px',
+                            fontWeight: 700,
+                            textAlign: 'center',
+                            outline: 'none',
+                          }}
+                        />
+                      ))}
+                    </div>
+
+                    {error && (
+                      <div style={{ padding: '9px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1.5px solid #ef4444', borderRadius: '10px', color: '#ef4444', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <AlertCircle size={15} color="#ef4444" />
+                        <span>{error}</span>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={emailOtpLoading || emailOtpDigits.some((d) => !d)}
+                      onClick={() => handleVerifyRecoveryEmailCode()}
+                      className="primary-action-btn-lux"
+                      style={{ marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                    >
+                      <span>{emailOtpLoading ? 'Verifying...' : 'Verify Code & Sign In'}</span>
+                      <CheckCircle2 size={17} />
+                    </button>
+
+                    <div style={{ textAlign: 'center', marginTop: 4 }}>
+                      <button
+                        type="button"
+                        onClick={handleSendRecoveryEmailCode}
+                        disabled={emailOtpLoading || recoveryEmailOtpTimer > 0}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: recoveryEmailOtpTimer > 0 ? 'var(--text-secondary)' : '#10b981',
+                          fontWeight: 600,
+                          fontSize: '12px',
+                          cursor: recoveryEmailOtpTimer > 0 ? 'default' : 'pointer',
+                        }}
+                      >
+                        {recoveryEmailOtpTimer > 0
+                          ? `Resend verification code in ${recoveryEmailOtpTimer}s`
+                          : `Didn't receive code? Resend email`}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecoveryEmailMode(false);
+                    setError('');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    textAlign: 'center',
+                  }}
+                >
+                  ← Back to Authenticator / PIN Verification
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setStep('phone');
+                setPending2FAUser(null);
+                setPasswordInput('');
+                sessionStorage.removeItem('shongjog_pending_2fa');
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                fontSize: '12.5px',
+                cursor: 'pointer',
+                padding: '6px',
+                textAlign: 'center',
+              }}
+            >
+              ← Back to Sign In
             </button>
           </form>
         )}
@@ -809,11 +2145,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
             justifyContent: 'center',
             gap: 6,
             fontSize: '11.5px',
-            color: '#64748b',
+            color: 'var(--text-muted)',
           }}
         >
           <ShieldCheck size={14} color="var(--accent-light)" />
-          Hardware ECDSA P-256 cryptographic keys • Synced to Supabase
+          End-to-end encrypted • Private & Secure
         </div>
       </div>
     </div>

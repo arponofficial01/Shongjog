@@ -1,12 +1,15 @@
 // Real WebRTC Transport Service
 // Supports direct Audio Calling (MediaStream) and Data Channels for offline messages & files
 // Handles signaling via:
-// 1. BroadcastChannel (Local browser tabs/devices test)
-// 2. Direct Offline Pairing Exchange (Token / QR code for air-gapped / local LAN pairing)
-// 3. Supabase Realtime Signaling (when internet is available)
+// 1. Direct WebRTC DataChannel (for already paired air-gapped devices)
+// 2. Local LAN / Hotspot Hub (Zero-Internet Wi-Fi / Hotspot calling via LanSignalingService)
+// 3. Supabase Realtime (when internet is available)
+// 4. BroadcastChannel (Local browser tabs/devices test)
+
+import { LanSignalingService } from './lanSignalingService';
 
 export interface SignalingMessage {
-  type: 'offer' | 'answer' | 'candidate' | 'call_request' | 'call_response' | 'call_end';
+  type: 'offer' | 'answer' | 'candidate' | 'call_request' | 'call_response' | 'call_end' | 'mesh_action';
   senderId: string;
   senderName: string;
   targetId: string;
@@ -67,7 +70,27 @@ export class WebRTCService {
   public static onChatMessageReceived?: (msg: any) => void;
 
   public sendSignalingMessage(msg: SignalingMessage) {
-    // 1. Try local BroadcastChannel (offline / same-host)
+    // 1. Direct WebRTC DataChannel (if already connected peer-to-peer)
+    if (this.dataChannel && this.dataChannel.readyState === 'open') {
+      try {
+        this.dataChannel.send(JSON.stringify({ protocol: 'webrtc_signaling', signal: msg }));
+      } catch (err) {
+        console.warn('[WebRTC DataChannel Signaling Error]:', err);
+      }
+    }
+
+    // 2. Local Wi-Fi / Hotspot LAN Hub (Zero-Internet real-time local signaling)
+    LanSignalingService.sendSignal(msg).catch(() => {});
+
+    // 3. Delegate to external caller / Supabase Realtime (when internet is available)
+    if (this.onSignalingMessageNeeded) {
+      this.onSignalingMessageNeeded(msg);
+    }
+    if (WebRTCService.globalSignalingDelegate) {
+      WebRTCService.globalSignalingDelegate(msg);
+    }
+
+    // 4. Local BroadcastChannel (same-host multi-tab test)
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage(msg);
@@ -75,96 +98,206 @@ export class WebRTCService {
         console.warn('BroadcastChannel error', err);
       }
     }
-    // 2. Delegate to external caller (e.g. Supabase Realtime or Manual Pairing UI)
-    if (this.onSignalingMessageNeeded) {
-      this.onSignalingMessageNeeded(msg);
-    }
-    if (WebRTCService.globalSignalingDelegate) {
-      WebRTCService.globalSignalingDelegate(msg);
-    }
   }
+
+  private iceCandidateQueue: RTCIceCandidateInit[] = [];
 
   /**
    * Initializes RTCPeerConnection with STUN fallback (for internet) and host candidates (for offline LAN)
    */
   public async initPeerConnection(withAudio: boolean = false): Promise<RTCPeerConnection> {
-    if (this.peerConnection && this.peerConnection.signalingState !== 'closed') {
-      return this.peerConnection;
+    if (!this.peerConnection || this.peerConnection.signalingState === 'closed') {
+      const config: RTCConfiguration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+          { urls: 'stun:stun.nextcloud.com:443' },
+          { urls: 'stun:stun.services.mozilla.com' },
+        ],
+        iceCandidatePoolSize: 10,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+      };
+
+      this.peerConnection = new RTCPeerConnection(config);
+      this.remoteAudioStream = new MediaStream();
+
+      this.peerConnection.onconnectionstatechange = () => {
+        if (!this.peerConnection) return;
+        const state = this.peerConnection.connectionState as WebRTCConnectionState;
+        this.connectionState = state;
+        if (this.onStateChange) this.onStateChange(state);
+      };
+
+      this.peerConnection.oniceconnectionstatechange = () => {
+        if (!this.peerConnection) return;
+        const iceState = this.peerConnection.iceConnectionState;
+        console.log('[WebRTC] iceConnectionState:', iceState);
+        if (iceState === 'connected' || iceState === 'completed') {
+          if (this.connectionState !== 'connected') {
+            this.connectionState = 'connected';
+            if (this.onStateChange) this.onStateChange('connected');
+          }
+        } else if (iceState === 'failed') {
+          if (this.connectionState !== 'failed') {
+            this.connectionState = 'failed';
+            if (this.onStateChange) this.onStateChange('failed');
+          }
+        }
+      };
+
+      this.peerConnection.onicecandidate = (event) => {
+        if (event.candidate && event.candidate.candidate) {
+          const candidateData = event.candidate.toJSON ? event.candidate.toJSON() : {
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+            usernameFragment: event.candidate.usernameFragment,
+          };
+          this.sendSignalingMessage({
+            type: 'candidate',
+            senderId: this.localUserId,
+            senderName: 'Device',
+            targetId: this.peerId,
+            payload: candidateData,
+            timestamp: Date.now(),
+          });
+        }
+      };
+
+      // Handle remote media tracks (Audio & Video)
+      this.peerConnection.ontrack = (event) => {
+        console.log('[WebRTC] ontrack event received:', event.track.kind, 'stream count:', event.streams.length);
+        if (event.track) {
+          event.track.enabled = true;
+        }
+
+        // Direct native stream binding ensures hardware audio clock works across Android WebView & Electron
+        if (event.streams && event.streams[0]) {
+          this.remoteAudioStream = event.streams[0];
+          this.remoteAudioStream.getAudioTracks().forEach((track) => {
+            track.enabled = true;
+          });
+        } else {
+          if (!this.remoteAudioStream) {
+            this.remoteAudioStream = new MediaStream();
+          }
+          if (event.track && !this.remoteAudioStream.getTracks().some((t) => t.id === event.track.id)) {
+            this.remoteAudioStream.addTrack(event.track);
+          }
+        }
+
+        if (this.onRemoteStream && this.remoteAudioStream) {
+          this.onRemoteStream(this.remoteAudioStream);
+        }
+      };
     }
 
-    const config: RTCConfiguration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
-      iceCandidatePoolSize: 10,
-    };
-
-    this.peerConnection = new RTCPeerConnection(config);
-    this.remoteAudioStream = new MediaStream();
-
-    this.peerConnection.onconnectionstatechange = () => {
-      if (!this.peerConnection) return;
-      const state = this.peerConnection.connectionState as WebRTCConnectionState;
-      this.connectionState = state;
-      if (this.onStateChange) this.onStateChange(state);
-    };
-
-    this.peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.sendSignalingMessage({
-          type: 'candidate',
-          senderId: this.localUserId,
-          senderName: 'Device',
-          targetId: this.peerId,
-          payload: event.candidate,
-          timestamp: Date.now(),
-        });
-      }
-    };
-
-    // Handle remote media tracks (Audio)
-    this.peerConnection.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        this.remoteAudioStream = event.streams[0];
-      } else if (event.track) {
-        this.remoteAudioStream?.addTrack(event.track);
-      }
-      if (this.onRemoteStream && this.remoteAudioStream) {
-        this.onRemoteStream(this.remoteAudioStream);
-      }
-    };
-
-    // If audio is requested, add local media tracks
-    if (withAudio) {
+    // Always ensure available local audio/video tracks are attached to the peerConnection
+    if (this.localAudioStream) {
+      const senders = this.peerConnection.getSenders();
+      this.localAudioStream.getTracks().forEach((track) => {
+        const alreadyAdded = senders.some((s) => s.track?.id === track.id);
+        if (!alreadyAdded) {
+          this.peerConnection?.addTrack(track, this.localAudioStream!);
+        }
+      });
+    } else if (withAudio) {
       await this.attachLocalAudioTrack();
     }
 
+    // Guarantee bidirectional transceivers for both audio and video
+    try {
+      const senders = this.peerConnection.getSenders();
+      if (!senders.some((s) => s.track?.kind === 'audio')) {
+        this.peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+      }
+      if (!senders.some((s) => s.track?.kind === 'video')) {
+        this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+      }
+    } catch {}
+
     return this.peerConnection;
+  }
+
+  /**
+   * Captures microphone audio & optional video using MediaDevices API and adds tracks to RTCPeerConnection
+   */
+  public async attachLocalMediaTrack(withVideo: boolean = false): Promise<MediaStream> {
+    if (!this.localAudioStream) {
+      try {
+        this.localAudioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: withVideo
+            ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+            : false,
+        });
+      } catch (err) {
+        // Fallback for hardware drivers that fail on complex constraints
+        try {
+          this.localAudioStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: withVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+          });
+        } catch (fbErr) {
+          if (withVideo) {
+            this.localAudioStream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+              video: false,
+            });
+          } else {
+            throw fbErr;
+          }
+        }
+      }
+      // Ensure all local audio tracks are active
+      this.localAudioStream.getAudioTracks().forEach((t) => {
+        t.enabled = true;
+      });
+    } else if (withVideo && this.localAudioStream.getVideoTracks().length === 0) {
+      try {
+        const videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        });
+        const videoTrack = videoStream.getVideoTracks()[0];
+        if (videoTrack) {
+          this.localAudioStream.addTrack(videoTrack);
+          if (this.peerConnection) {
+            this.peerConnection.addTrack(videoTrack, this.localAudioStream);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not add video track', e);
+      }
+    }
+
+    if (this.peerConnection) {
+      const senders = this.peerConnection.getSenders();
+      this.localAudioStream.getTracks().forEach((track) => {
+        const alreadyAdded = senders.some((s) => s.track?.id === track.id);
+        if (!alreadyAdded) {
+          this.peerConnection?.addTrack(track, this.localAudioStream!);
+        }
+      });
+    }
+
+    return this.localAudioStream;
   }
 
   /**
    * Captures microphone audio using MediaDevices API and adds track to RTCPeerConnection
    */
   public async attachLocalAudioTrack(): Promise<MediaStream> {
-    if (!this.localAudioStream) {
-      this.localAudioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
-      });
-    }
-
-    if (this.peerConnection) {
-      this.localAudioStream.getAudioTracks().forEach((track) => {
-        this.peerConnection?.addTrack(track, this.localAudioStream!);
-      });
-    }
-
-    return this.localAudioStream;
+    return this.attachLocalMediaTrack(false);
   }
 
   public getLocalAudioStream(): MediaStream | null {
@@ -210,6 +343,10 @@ export class WebRTCService {
         }
       }
 
+      if (payload && payload.protocol === 'webrtc_signaling' && payload.signal) {
+        this.handleIncomingSignalingMessage(payload.signal);
+      }
+
       if (payload && payload.protocol === 'chat_message' && payload.message) {
         if (WebRTCService.onChatMessageReceived) {
           WebRTCService.onChatMessageReceived(payload.message);
@@ -236,6 +373,7 @@ export class WebRTCService {
 
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
     });
     await pc.setLocalDescription(offer);
 
@@ -255,8 +393,17 @@ export class WebRTCService {
       this.setupDataChannel(event.channel);
     };
 
+    if (pc.signalingState !== 'stable') {
+      console.warn('[WebRTC] Receiving offer in non-stable state:', pc.signalingState);
+    }
+
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
+    await this.flushIceCandidateQueue();
+
+    const answer = await pc.createAnswer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    });
     await pc.setLocalDescription(answer);
 
     return answer;
@@ -264,15 +411,39 @@ export class WebRTCService {
 
   public async handleAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
     if (!this.peerConnection) return;
+    if (this.peerConnection.signalingState !== 'have-local-offer') {
+      console.warn('[WebRTC] Ignoring answer in invalid state:', this.peerConnection.signalingState);
+      return;
+    }
     await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    await this.flushIceCandidateQueue();
   }
 
   public async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
-    if (!this.peerConnection) return;
+    if (!candidate || !candidate.candidate) return;
+    if (!this.peerConnection || !this.peerConnection.remoteDescription || !this.peerConnection.remoteDescription.type) {
+      // Buffer ICE candidate until remote description is applied
+      this.iceCandidateQueue.push(candidate);
+      return;
+    }
     try {
       await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (e) {
-      console.warn('Error adding ICE candidate', e);
+    } catch (err) {
+      console.warn('Could not add ICE candidate', err);
+    }
+  }
+
+  private async flushIceCandidateQueue(): Promise<void> {
+    if (!this.peerConnection || !this.peerConnection.remoteDescription) return;
+    while (this.iceCandidateQueue.length > 0) {
+      const candidate = this.iceCandidateQueue.shift();
+      if (candidate && candidate.candidate) {
+        try {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.warn('Error applying queued ICE candidate', e);
+        }
+      }
     }
   }
 
@@ -292,11 +463,69 @@ export class WebRTCService {
   }
 
   /**
+   * Adopts an already-established RTCPeerConnection and RTCDataChannel (e.g. from Offline Pairing)
+   */
+  public adoptConnection(pc: RTCPeerConnection, dc: RTCDataChannel) {
+    if (this.peerConnection && this.peerConnection !== pc) {
+      try {
+        this.peerConnection.close();
+      } catch {
+        // safe close
+      }
+    }
+    this.peerConnection = pc;
+    this.setupDataChannel(dc);
+    this.connectionState = dc.readyState === 'open' ? 'connected' : 'connecting';
+    if (this.onStateChange) this.onStateChange(this.connectionState);
+
+    // Ensure ICE candidates generated by this adopted PC are dispatched
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        this.sendSignalingMessage({
+          type: 'candidate',
+          senderId: this.localUserId,
+          senderName: 'Device',
+          targetId: this.peerId,
+          payload: event.candidate,
+          timestamp: Date.now(),
+        });
+      }
+    };
+
+    this.peerConnection.ontrack = (event) => {
+      if (event.streams && event.streams[0]) {
+        this.remoteAudioStream = event.streams[0];
+      } else if (event.track) {
+        if (!this.remoteAudioStream) this.remoteAudioStream = new MediaStream();
+        this.remoteAudioStream.addTrack(event.track);
+      }
+      if (this.onRemoteStream && this.remoteAudioStream) {
+        this.onRemoteStream(this.remoteAudioStream);
+      }
+    };
+  }
+
+  private static processedSignalSignatures: Set<string> = new Set();
+
+  /**
    * Processes incoming signaling message
    */
   public async handleIncomingSignalingMessage(msg: SignalingMessage): Promise<void> {
+    if (!msg || !msg.type) return;
+
+    // Deduplicate identical signals delivered concurrently across multiple transports (Supabase, LAN, BroadcastChannel)
+    const sigKey = `${msg.senderId}_${msg.targetId}_${msg.type}_${msg.timestamp}_${
+      msg.payload?.type || (msg.payload?.candidate ? String(msg.payload.candidate).slice(0, 30) : '')
+    }`;
+    if (WebRTCService.processedSignalSignatures.has(sigKey)) {
+      return;
+    }
+    WebRTCService.processedSignalSignatures.add(sigKey);
+    setTimeout(() => WebRTCService.processedSignalSignatures.delete(sigKey), 8000);
+
     if (msg.type === 'offer') {
-      const answer = await this.handleOfferAndCreateAnswer(msg.payload, false);
+      const hasAudio = Boolean(this.localAudioStream && this.localAudioStream.getAudioTracks().length > 0);
+      const answer = await this.handleOfferAndCreateAnswer(msg.payload, hasAudio);
       this.sendSignalingMessage({
         type: 'answer',
         senderId: this.localUserId,
@@ -329,6 +558,16 @@ export class WebRTCService {
       this.peerConnection = null;
     }
     this.connectionState = 'closed';
+    this.remoteAudioStream = null;
+    this.iceCandidateQueue = [];
     if (this.onStateChange) this.onStateChange('closed');
+  }
+
+  public static resetInstance(localUserId: string, peerId: string) {
+    const key = `${localUserId}_${peerId}`;
+    if (this.instances.has(key)) {
+      this.instances.get(key)!.close();
+      this.instances.delete(key);
+    }
   }
 }

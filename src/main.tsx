@@ -3,6 +3,14 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 
+// Immediate Theme / Mode Initialization to prevent unstyled flash
+try {
+  const savedMode = localStorage.getItem('shongjog_mode') || 'dark';
+  document.documentElement.setAttribute('data-mode', savedMode);
+} catch (e) {
+  document.documentElement.setAttribute('data-mode', 'dark');
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
@@ -17,3 +25,4 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     });
   });
 }
+

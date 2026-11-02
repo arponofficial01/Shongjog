@@ -192,6 +192,35 @@ export class SyncEngine {
 
         await db.put('messages', newMsg);
         imported++;
+
+        // Update conversation snippet in IndexedDB so conversation list updates immediately
+        let conv = await db.get('conversations', newMsg.conversationId);
+        let snippet = (newMsg.content || '').replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim();
+        if (newMsg.type === 'voice') snippet = '🎙️ Voice note';
+        if (newMsg.type === 'file') snippet = `📎 ${newMsg.media?.fileName || 'File attachment'}`;
+        if (newMsg.type === 'call_event') snippet = newMsg.content ? newMsg.content.replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim() : '📞 Call log';
+        snippet = snippet.slice(0, 100);
+
+        if (conv) {
+          if (remoteTime >= conv.lastMessageTimestamp) {
+            conv.lastMessageSnippet = snippet;
+            conv.lastMessageTimestamp = remoteTime;
+            conv.updatedAt = remoteTime;
+            await db.put('conversations', conv);
+          }
+        } else {
+          const peerId = newMsg.senderId === currentUserId ? newMsg.recipientId : newMsg.senderId;
+          const newConv = {
+            id: newMsg.conversationId,
+            type: 'direct' as const,
+            participantIds: [currentUserId, peerId || ''].filter(Boolean),
+            lastMessageSnippet: snippet,
+            lastMessageTimestamp: remoteTime,
+            unreadCount: 0,
+            updatedAt: remoteTime,
+          };
+          await db.put('conversations', newConv);
+        }
       }
     }
 
