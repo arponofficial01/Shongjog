@@ -655,7 +655,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       setStep('otp');
       setCountdown(60);
       setCanResend(false);
-      setOtpDigits(['', '', '', '', '', '']);
+      if (!res.isRealSms && res.devOtp) {
+        setOtpDigits(res.devOtp.slice(0, 6).split(''));
+      } else {
+        setOtpDigits(['', '', '', '', '', '']);
+      }
       setTimeout(() => otpInputRefs.current[0]?.focus(), 100);
     } catch (err: any) {
       setError(err.message || 'Failed to dispatch verification code.');
@@ -739,7 +743,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       setDevOtpNotification(res.devOtp);
       setCountdown(60);
       setCanResend(false);
-      setOtpDigits(['', '', '', '', '', '']);
+      if (!res.isRealSms && res.devOtp) {
+        setOtpDigits(res.devOtp.slice(0, 6).split(''));
+      } else {
+        setOtpDigits(['', '', '', '', '', '']);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to resend code');
     } finally {
@@ -1030,17 +1038,26 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                     Existing Account: {existingUser?.displayName || 'Citizen'}
                   </span>
                 </div>
-                <span
+                <button
+                  type="button"
+                  onClick={() => handleSendOtp()}
+                  title="Click to sign in instantly with verification code"
                   style={{
-                    fontSize: '10.5px',
-                    color: 'var(--text-primary)',
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    padding: '2px 7px',
-                    borderRadius: '4px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: 'var(--accent-light)',
+                    background: 'rgba(16, 185, 129, 0.18)',
+                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                    padding: '3px 8px',
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
                   }}
                 >
                   ⚡ Instant Sign In
-                </span>
+                </button>
               </div>
             )}
 

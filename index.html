@@ -14,6 +14,16 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Clear legacy cache-v1 if present to force immediate updates
+      if ('caches' in window) {
+        caches.has('shongjog-cache-v1').then(function(hasV1) {
+          if (hasV1) {
+            caches.delete('shongjog-cache-v1');
+          }
+        });
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

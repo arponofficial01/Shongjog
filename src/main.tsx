@@ -17,12 +17,27 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 )
 
-// Register Offline Service Worker
+// Register Offline Service Worker with automatic update detection
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((err) => {
-      console.warn('Service worker registration notice:', err);
-    });
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => {
+        reg.update().catch(() => {});
+        reg.onupdatefound = () => {
+          const installingWorker = reg.installing;
+          if (installingWorker) {
+            installingWorker.onstatechange = () => {
+              if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                window.location.reload();
+              }
+            };
+          }
+        };
+      })
+      .catch((err) => {
+        console.warn('Service worker registration notice:', err);
+      });
   });
 }
 
