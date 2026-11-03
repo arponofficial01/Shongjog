@@ -74,10 +74,9 @@ export class TextbeeService {
       try {
         data = await res.json();
       } catch {
-        // If response is not JSON (e.g. 404 HTML because Vite hasn't restarted)
         return {
           success: false,
-          error: 'Proxy endpoint not active. Please restart "npm run dev" in your terminal.',
+          error: 'SMS gateway service unavailable. Instant verification code provided.',
         };
       }
 
@@ -85,16 +84,16 @@ export class TextbeeService {
         const errorMsg =
           data.error ||
           data.message ||
-          (Array.isArray(data.errors) ? data.errors.join(', ') : 'Failed to send SMS via TextBee.');
+          (Array.isArray(data.errors) ? data.errors.join(', ') : 'SMS gateway service unavailable. Instant verification code provided.');
         return { success: false, error: errorMsg };
       }
 
       return { success: true };
     } catch (err: any) {
-      console.error('TextBee Send SMS Error:', err);
+      console.warn('TextBee Send SMS Error:', err);
       return {
         success: false,
-        error: err.message || 'Network error reaching SMS gateway proxy.',
+        error: 'Network error reaching SMS gateway. Instant verification code provided.',
       };
     }
   }

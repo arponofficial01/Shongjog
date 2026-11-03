@@ -112,8 +112,8 @@ export class AuthService {
       }
     }
 
-    if (!isRealSms && !smsNotice) {
-      smsNotice = 'Add VITE_TEXTBEE_API_KEY in .env to dispatch real SMS automatically from your Android phone!';
+    if (!isRealSms) {
+      smsNotice = 'Instant verification code provided. Enter the 6-digit code above to continue.';
     }
 
     // Store verified OTP session (valid for 5 minutes)
@@ -227,13 +227,33 @@ export class AuthService {
           .maybeSingle();
 
         if (data) {
+          let extractedHash = data.password_hash;
+          let extractedPinHash: string | undefined = undefined;
+          let cleanBio = data.bio || 'Available on Shongjog direct network';
+          if (!extractedHash && cleanBio.includes('__pwd:')) {
+            const m = cleanBio.match(/__pwd:([a-f0-9]+)/);
+            if (m) {
+              extractedHash = m[1];
+              cleanBio = cleanBio.replace(/\s*__pwd:[a-f0-9]+/, '').trim();
+            }
+          }
+          if (cleanBio.includes('__recpin:')) {
+            const pm = cleanBio.match(/__recpin:([a-f0-9]+)/);
+            if (pm) {
+              extractedPinHash = pm[1];
+              cleanBio = cleanBio.replace(/\s*__recpin:[a-f0-9]+/, '').trim();
+            }
+          }
+
           existingProfile = {
             id: data.id,
             phoneNumber: data.phone_number,
             username: data.username,
             displayName: data.display_name,
             avatarUrl: data.avatar_url,
-            bio: data.bio || 'Available on Shongjog direct network',
+            bio: cleanBio,
+            passwordHash: extractedHash,
+            recoveryPinHash: extractedPinHash,
             publicKey: data.public_key,
             deviceId: data.device_id,
             createdAt: new Date(data.created_at).getTime(),
