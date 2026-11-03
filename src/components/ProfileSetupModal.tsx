@@ -24,9 +24,9 @@ import { getDatabase } from '../services/db/database';
 import { getSupabaseConfig, getSupabase } from '../services/supabase/supabaseClient';
 import { BrandLogo } from './BrandLogo';
 import { LoginCinematicIntro } from './LoginCinematicIntro';
-import { RecoverySyncService } from '../services/sync/recoverySyncService';
 import { AccountSyncService } from '../services/sync/accountSyncService';
 import { DeviceSessionService } from '../services/auth/deviceSessionService';
+import { TotpService } from '../services/auth/totpService';
 
 interface ProfileSetupModalProps {
   onProfileCreated: (profile: UserProfile) => void;
@@ -116,9 +116,9 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
         const parsed = JSON.parse(pendingJson) as UserProfile;
         if (parsed && parsed.id) {
           (async () => {
-            const status = await RecoverySyncService.getRecoveryPinStatus(parsed);
-            if (!status.hasPin) {
-              // 2FA has been removed from this account - complete login immediately
+            const totpStatus = await TotpService.getTotpStatus(parsed);
+            if (!totpStatus.isEnabled || !totpStatus.secret) {
+              // Authenticator 2FA is not active on this account - complete login immediately
               sessionStorage.removeItem('shongjog_pending_2fa');
               IdentityService.activateSession(parsed.id);
               DeviceSessionService.registerSession(parsed).catch(console.warn);
@@ -294,10 +294,11 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       return;
     }
 
-    // Check if 2FA has been disabled or removed on this account in cloud/settings
-    const pinStatus = await RecoverySyncService.getRecoveryPinStatus(user);
-    if (!pinStatus.hasPin) {
-      // No 2FA required on this account
+    // STRICT: Two-Factor Authentication is ONLY the Authenticator (TOTP) code.
+    // It is NEVER triggered by or checked against App Lock PIN or Backup Recovery PIN!
+    const totpStatus = await TotpService.getTotpStatus(user);
+    if (!totpStatus.isEnabled || !totpStatus.secret) {
+      // No Authenticator 2FA active on this account - log in immediately
       sessionStorage.removeItem('shongjog_pending_2fa');
       IdentityService.activateSession(user.id);
       DeviceSessionService.registerSession(user).catch(console.warn);
@@ -357,30 +358,35 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
 
   const triggerVerify2FA = async (codeToVerify?: string) => {
     if (!pending2FAUser) return;
-    const fullPin = codeToVerify || twoFactorDigits.join('');
-    if (fullPin.length !== 6) {
-      setError('Please enter all 6 digits of your Two-Factor Security PIN.');
+    const fullCode = codeToVerify || twoFactorDigits.join('');
+    if (fullCode.length !== 6) {
+      setError('Please enter all 6 digits of your Authenticator code.');
       return;
     }
 
     setError('');
     setIsLoading(true);
     try {
-      const status = await RecoverySyncService.getRecoveryPinStatus(pending2FAUser);
-      if (status.hasPin) {
-        const isValid = await RecoverySyncService.verifyPin(pending2FAUser, fullPin);
-        if (!isValid) {
-          setError('Incorrect 6-digit Authenticator code or Security PIN. Please try again.');
-          setTwoFactorDigits(['', '', '', '', '', '']);
-          setTimeout(() => twoFactorInputRefs.current[0]?.focus(), 60);
-          setIsLoading(false);
-          return;
-        }
-      } else {
-        await RecoverySyncService.setRecoveryPin(pending2FAUser, fullPin);
+      const totpStatus = await TotpService.getTotpStatus(pending2FAUser);
+      if (!totpStatus.isEnabled || !totpStatus.secret) {
+        // Fallback: If 2FA was disabled, let user proceed
+        IdentityService.activateSession(pending2FAUser.id);
+        DeviceSessionService.registerSession(pending2FAUser).catch(console.warn);
+        sessionStorage.removeItem('shongjog_pending_2fa');
+        onProfileCreated(pending2FAUser);
+        return;
       }
 
-      // Sync all settings, chat lock PIN, and cloud profile to this device immediately
+      const isValid = await TotpService.verifyCode(totpStatus.secret, fullCode);
+      if (!isValid) {
+        setError('Incorrect 6-digit Authenticator code. Please check your Authenticator app (e.g. Google Authenticator) and try again.');
+        setTwoFactorDigits(['', '', '', '', '', '']);
+        setTimeout(() => twoFactorInputRefs.current[0]?.focus(), 60);
+        setIsLoading(false);
+        return;
+      }
+
+      // Sync all settings and cloud profile to this device immediately
       AccountSyncService.syncAllFromCloud(pending2FAUser).catch((err: any) => {
         console.warn('Background sync on 2FA login notice:', err);
       });
@@ -655,11 +661,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       setStep('otp');
       setCountdown(60);
       setCanResend(false);
-      if (!res.isRealSms && res.devOtp) {
-        setOtpDigits(res.devOtp.slice(0, 6).split(''));
-      } else {
-        setOtpDigits(['', '', '', '', '', '']);
-      }
+      setOtpDigits(['', '', '', '', '', '']);
       setTimeout(() => otpInputRefs.current[0]?.focus(), 100);
     } catch (err: any) {
       setError(err.message || 'Failed to dispatch verification code.');
@@ -743,11 +745,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
       setDevOtpNotification(res.devOtp);
       setCountdown(60);
       setCanResend(false);
-      if (!res.isRealSms && res.devOtp) {
-        setOtpDigits(res.devOtp.slice(0, 6).split(''));
-      } else {
-        setOtpDigits(['', '', '', '', '', '']);
-      }
+      setOtpDigits(['', '', '', '', '', '']);
     } catch (err: any) {
       setError(err.message || 'Failed to resend code');
     } finally {
@@ -1038,26 +1036,17 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                     Existing Account: {existingUser?.displayName || 'Citizen'}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleSendOtp()}
-                  title="Click to sign in instantly with verification code"
+                <span
                   style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    color: 'var(--accent-light)',
-                    background: 'rgba(16, 185, 129, 0.18)',
-                    border: '1px solid rgba(16, 185, 129, 0.4)',
-                    padding: '3px 8px',
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
+                    fontSize: '10.5px',
+                    color: 'var(--text-primary)',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    padding: '2px 7px',
+                    borderRadius: '4px',
                   }}
                 >
                   ⚡ Instant Sign In
-                </button>
+                </span>
               </div>
             )}
 
@@ -1932,10 +1921,10 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
               <>
                 <div style={{ textAlign: 'center', marginTop: 4 }}>
                   <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-pure)', marginBottom: 4 }}>
-                    Two-Factor Security Verification
+                    Two-Factor Authentication
                   </div>
                   <p style={{ fontSize: '12.5px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
-                    Enter your 6-digit Authenticator code (or Security PIN) to verify your login on this device.
+                    Enter the 6-digit code from your Authenticator app (e.g. Google Authenticator, Microsoft Authenticator) to verify sign-in.
                   </p>
                 </div>
 
@@ -2047,7 +2036,7 @@ export const ProfileSetupModal: React.FC<ProfileSetupModalProps> = ({ onProfileC
                     gap: 8,
                   }}
                 >
-                  <span>{isLoading ? 'Verifying PIN...' : 'Verify & Continue'}</span>
+                  <span>{isLoading ? 'Verifying Authenticator Code...' : 'Verify Code & Sign In'}</span>
                   <ArrowRight size={18} />
                 </button>
 

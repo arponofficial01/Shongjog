@@ -4,7 +4,6 @@
 import { getDatabase } from '../db/database';
 import type { UserProfile, Contact, Conversation, Message } from '../db/database';
 import { getSupabase, getSupabaseConfig } from '../supabase/supabaseClient';
-import { TotpService } from '../auth/totpService';
 
 export class RecoverySyncService {
   /**
@@ -22,45 +21,28 @@ export class RecoverySyncService {
   /**
    * Checks if user has a Recovery / 2FA Security PIN or TOTP Authenticator set (in IndexedDB, localStorage, or Supabase profile)
    */
+  /**
+   * Checks if user has a 6-digit Chat Backup & Recovery PIN set (in IndexedDB, bio, or Supabase profile)
+   * STRICT: Only checks Recovery PIN for cloud backup. Never conflates with App Lock or Authenticator 2FA!
+   */
   public static async getRecoveryPinStatus(profile: UserProfile): Promise<{
     hasPin: boolean;
     pinHash?: string;
-    plainPin?: string;
-    totpSecret?: string;
-    hasTotp?: boolean;
   }> {
-    let totpSecret = TotpService.extractTotpSecret(profile.bio);
-
     // 1. Check local profile first
     if (profile.recoveryPinHash) {
-      return { hasPin: true, pinHash: profile.recoveryPinHash, totpSecret: totpSecret || undefined, hasTotp: Boolean(totpSecret) };
-    }
-    if (profile.chatLockPin) {
-      return { hasPin: true, plainPin: profile.chatLockPin, totpSecret: totpSecret || undefined, hasTotp: Boolean(totpSecret) };
+      return { hasPin: true, pinHash: profile.recoveryPinHash };
     }
 
-    // 2. Check localStorage
-    const localPin = localStorage.getItem('shongjog_chat_pin') || localStorage.getItem('shongjog_device_pin');
-    if (localPin && /^\d{6}$/.test(localPin.trim())) {
-      return { hasPin: true, plainPin: localPin.trim(), totpSecret: totpSecret || undefined, hasTotp: Boolean(totpSecret) };
-    }
-
-    // 3. Check bio for embedded __recpin: or __lockpin: or __totp:
+    // 2. Check bio for embedded __recpin:
     if (profile.bio) {
       const recMatch = profile.bio.match(/__recpin:([a-f0-9]+)/);
-      const lockMatch = profile.bio.match(/__lockpin:([0-9]{6})/);
-      const totpMatch = profile.bio.match(/__totp:([A-Za-z0-9]+)/);
-      if (totpMatch) totpSecret = totpMatch[1].toUpperCase();
-
       if (recMatch) {
-        return { hasPin: true, pinHash: recMatch[1], totpSecret: totpSecret || undefined, hasTotp: Boolean(totpSecret) };
-      }
-      if (lockMatch) {
-        return { hasPin: true, plainPin: lockMatch[1], totpSecret: totpSecret || undefined, hasTotp: Boolean(totpSecret) };
+        return { hasPin: true, pinHash: recMatch[1] };
       }
     }
 
-    // 4. Check remote Supabase if online (by ID or phone number)
+    // 3. Check remote Supabase if online (by ID or phone number)
     const { isConfigured } = getSupabaseConfig();
     if (navigator.onLine && isConfigured) {
       try {
@@ -77,29 +59,14 @@ export class RecoverySyncService {
         const { data } = await query.maybeSingle();
 
         if (data && data.bio) {
-          const totpMatch = data.bio.match(/__totp:([A-Za-z0-9]+)/);
-          if (totpMatch) {
-            totpSecret = totpMatch[1].toUpperCase();
-          }
           const recMatch = data.bio.match(/__recpin:([a-f0-9]+)/);
           if (recMatch) {
-            return { hasPin: true, pinHash: recMatch[1], totpSecret: totpSecret || undefined, hasTotp: Boolean(totpSecret) };
-          }
-          const lockMatch = data.bio.match(/__lockpin:([0-9]{6})/);
-          if (lockMatch) {
-            return { hasPin: true, plainPin: lockMatch[1], totpSecret: totpSecret || undefined, hasTotp: Boolean(totpSecret) };
-          }
-          if (totpSecret) {
-            return { hasPin: true, totpSecret, hasTotp: true };
+            return { hasPin: true, pinHash: recMatch[1] };
           }
         }
       } catch (err) {
         console.warn('Could not check remote recovery pin status', err);
       }
-    }
-
-    if (totpSecret) {
-      return { hasPin: true, totpSecret, hasTotp: true };
     }
 
     return { hasPin: false };
@@ -167,7 +134,7 @@ export class RecoverySyncService {
   }
 
   /**
-   * Verifies the entered 6-digit PIN against stored hash, synced lockpin, or active TOTP Authenticator across all devices
+   * Verifies the entered 6-digit Recovery PIN against stored hash (for chat backup decryption)
    */
   public static async verifyPin(profile: UserProfile, pin: string): Promise<boolean> {
     const cleanPin = pin.trim();
@@ -181,39 +148,14 @@ export class RecoverySyncService {
     if (profile.recoveryPinHash && profile.recoveryPinHash === enteredHash) {
       return true;
     }
-    if (profile.chatLockPin && profile.chatLockPin === cleanPin) {
-      return true;
-    }
 
-    // Direct check against device storage
-    const localPin = localStorage.getItem('shongjog_chat_pin') || localStorage.getItem('shongjog_device_pin');
-    if (localPin && localPin === cleanPin) {
-      return true;
-    }
-
-    // Check through getRecoveryPinStatus (includes cloud query by ID and phone, plus TOTP check)
+    // Check through getRecoveryPinStatus
     const status = await this.getRecoveryPinStatus(profile);
-
-    // 1. Check against active Google / Microsoft Authenticator TOTP code if 2FA is active
-    if (status.totpSecret) {
-      const isTotpValid = await TotpService.verifyCode(status.totpSecret, cleanPin);
-      if (isTotpValid) {
-        return true;
-      }
-    }
-
-    if (!status.hasPin) {
+    if (!status.hasPin || !status.pinHash) {
       return false;
     }
 
-    if (status.pinHash && status.pinHash === enteredHash) {
-      return true;
-    }
-    if (status.plainPin && status.plainPin === cleanPin) {
-      return true;
-    }
-
-    return false;
+    return status.pinHash === enteredHash;
   }
 
   /**

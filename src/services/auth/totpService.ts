@@ -1,6 +1,8 @@
 // RFC 6238 TOTP Cryptographic Service for Two-Factor Authentication
 // Compatible with Google Authenticator, Microsoft Authenticator, 1Password, Authy
 
+import { getSupabase, getSupabaseConfig } from '../supabase/supabaseClient';
+
 function base32Decode(str: string): Uint8Array {
   const base32chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let bits = '';
@@ -110,6 +112,54 @@ export class TotpService {
     }
     const local = typeof localStorage !== 'undefined' ? localStorage.getItem('shongjog_2fa_secret') : null;
     return local ? local.toUpperCase() : null;
+  }
+
+  /**
+   * Checks if user has Two-Factor Authentication (TOTP Authenticator) enabled.
+   * STRICT: Only returns true if an Authenticator TOTP secret exists.
+   * NEVER conflates with App Lock PIN or Backup PIN!
+   */
+  public static async getTotpStatus(profile: { id?: string; bio?: string; phoneNumber?: string }): Promise<{
+    isEnabled: boolean;
+    secret?: string;
+  }> {
+    // 1. Check profile bio
+    let secret = this.extractTotpSecret(profile?.bio);
+    if (secret) {
+      return { isEnabled: true, secret };
+    }
+
+    // 2. Check localStorage on current device
+    const localEnabled = typeof localStorage !== 'undefined' && localStorage.getItem('shongjog_2fa_enabled') === 'true';
+    const localSecret = typeof localStorage !== 'undefined' ? localStorage.getItem('shongjog_2fa_secret') : null;
+    if (localEnabled && localSecret) {
+      return { isEnabled: true, secret: localSecret.trim().toUpperCase() };
+    }
+
+    // 3. Check remote Supabase profile bio
+    const { isConfigured } = getSupabaseConfig();
+    if (navigator.onLine && isConfigured && (profile?.id || profile?.phoneNumber)) {
+      try {
+        const supabase = getSupabase();
+        let query = supabase.from('profiles').select('bio');
+        if (profile.id) {
+          query = query.eq('id', profile.id);
+        } else if (profile.phoneNumber) {
+          query = query.eq('phone_number', profile.phoneNumber);
+        }
+        const { data } = await query.maybeSingle();
+        if (data?.bio) {
+          const match = data.bio.match(/__totp:([A-Za-z0-9]+)/);
+          if (match && match[1]) {
+            return { isEnabled: true, secret: match[1].toUpperCase() };
+          }
+        }
+      } catch (err) {
+        console.warn('[TotpService] Could not check remote TOTP status:', err);
+      }
+    }
+
+    return { isEnabled: false };
   }
 }
 

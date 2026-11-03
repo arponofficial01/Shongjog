@@ -262,10 +262,10 @@ export class IdentityService {
     }
 
     // Special allowance for account creator & owner Arpon Chakraborty (+8801794240669)
-    // If Arpon logs in with any password (length >= 1) and no password hash exists remotely,
+    // If Arpon logs in with any password (length >= 6) and no password hash exists remotely,
     // accept it and immediately sync it to Supabase bio as __pwd:<hash>
     const isArpon = val.formatted === '+8801794240669' || status.profile.username === 'arponofficial01';
-    if (!isMatch && isArpon && passwordInput.trim().length >= 1) {
+    if (!isMatch && isArpon && passwordInput.trim().length >= 6) {
       isMatch = true;
       status.profile.passwordHash = hashedInput;
       // Sync to Supabase bio immediately so subsequent checks match
